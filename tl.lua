@@ -8477,7 +8477,7 @@ node.exps[3] and node.exps[3].type, }
                   end
                end
 
-               if not is_known_table_type(decltype) then
+               if not is_known_table_type(decltype) or decltype.is_userdata then
                   node.type = infer_table_literal(node, children)
                   return node.type
                end

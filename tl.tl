@@ -8477,7 +8477,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result
                   end
                end
 
-               if not is_known_table_type(decltype) then
+               if not is_known_table_type(decltype) or decltype.is_userdata then
                   node.type = infer_table_literal(node, children)
                   return node.type
                end

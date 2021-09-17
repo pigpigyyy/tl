@@ -693,8 +693,8 @@ describe("embedding", function()
          embed B
          c_value: string
       end
-      local b: B = {}
-      local c: C = {}
+      local b: B
+      local c: C
       print(b.a_value, c.a_value + c.b_value, c.c_value)
       local function f(a: A, b: B) end
       f(b, b)
