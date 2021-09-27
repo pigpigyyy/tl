@@ -6566,7 +6566,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result
                   for i = 2, #t1.types do
                      local t = t1.types[i]
                      if not is_a(t, t2e) then
-                        return false, terr(t, "got %s, expected %s", t, t2e)
+                        return false, terr(t, "%s is not a member of %s", t, t2e)
                      end
                   end
                end
