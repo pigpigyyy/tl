@@ -118,10 +118,10 @@ local record tl
 
    load: function(string, string, LoadMode, {any:any}): LoadFunction, string
    process: function(string, Env): (Result, string)
-   process_string: function(string, boolean, Env, string): Result
+   process_string: function(string, boolean, Env, ?string): Result
    gen: function(string, Env): string
    type_check: function(Node, TypeCheckOptions): Result
-   init_env: function(boolean, boolean | CompatMode, TargetMode, {string}): Env
+   init_env: function(?boolean, ?(boolean | CompatMode), ?TargetMode, ?{string}): Env
    version: function(): string
 
    package_loader_env: Env
@@ -212,7 +212,7 @@ local enum TokenKind
    "keyword"
    "op"
    "string"
-   "[" "]" "(" ")" "{" "}" "," ":" "#" "`" "." ";"
+   "[" "]" "(" ")" "{" "}" "," ":" "#" "`" "." ";" "?"
    "::"
    "..."
    "identifier"
@@ -382,7 +382,7 @@ do
    end
 
    local lex_any_char_kinds: {string:TokenKind} = {}
-   local single_char_kinds: {TokenKind} = {"[", "]", "(", ")", "{", "}", ",", "#", "`", ";"}
+   local single_char_kinds: {TokenKind} = {"[", "]", "(", ")", "{", "}", ",", "#", "`", ";", "?"}
    for _, c in ipairs(single_char_kinds) do
       lex_any_char_kinds[c] = c
    end
@@ -965,6 +965,9 @@ local record Type
    -- Lua compatibilty
    needs_compat: boolean
 
+   -- arguments: optional arity
+   opt: boolean
+
    -- tuple
    is_va: boolean
 
@@ -998,6 +1001,7 @@ local record Type
 
    -- function
    is_method: boolean
+   min_arity: number
    args: Type
    rets: Type
 
@@ -1111,7 +1115,7 @@ local record Fact
    f1: Fact
    f2: Fact
 
-   metamethod __call: function(Fact, Fact): Fact
+   metamethod __call: function(Fact, ?Fact): Fact
 end
 
 local enum KeyParsed
@@ -1203,6 +1207,7 @@ local record Node
 
    type: Type
    decltype: Type
+   opt: boolean
 end
 
 local function is_array_type(t:Type): boolean
@@ -1238,10 +1243,10 @@ end
 local parse_type_list: function(ParseState, integer, ParseTypeListMode): integer, Type
 local parse_expression: function(ParseState, integer): integer, Node, integer
 local parse_expression_and_tk: function(ps: ParseState, i: integer, tk: string): integer, Node
-local parse_statements: function(ParseState, integer, boolean): integer, Node
+local parse_statements: function(ParseState, integer, ?boolean): integer, Node
 local parse_argument_list: function(ParseState, integer): integer, Node
 local parse_argument_type_list: function(ParseState, integer): integer, Type
-local parse_type: function(ParseState, integer): integer, Type, integer
+local parse_type: function(ParseState, integer): integer, Type, nil
 local parse_newtype: function(ps: ParseState, i: integer): integer, Node
 local parse_enum_body: function(ps: ParseState, i: integer, def: Type, node: Node): integer, Node
 local parse_record_body: function(ps: ParseState, i: integer, def: Type, node: Node): integer, Node
@@ -1299,16 +1304,16 @@ local function new_type(ps: ParseState, i: integer, typename: TypeName): Type
    }
 end
 
-local function verify_kind(ps: ParseState, i: integer, kind: TokenKind, node_kind: NodeKind): integer, Node
+local function verify_kind(ps: ParseState, i: integer, kind: TokenKind, node_kind?: NodeKind): integer, Node
    if ps.tokens[i].kind == kind then
-      return i + 1, new_node(ps.tokens, i, node_kind)
+      return i + 1, new_node(ps.tokens, i, node_kind or kind)
    end
    return fail(ps, i, "syntax error, expected " .. kind)
 end
 
 local type SkipFunction = function(ParseState, integer): integer
 
-local function failskip(ps: ParseState, i: integer, msg: string, skip_fn: SkipFunction, starti: integer): integer
+local function failskip(ps: ParseState, i: integer, msg: string, skip_fn: SkipFunction, starti?: integer): integer
    local err_ps: ParseState = {
       tokens = ps.tokens,
       errs = {},
@@ -1345,7 +1350,8 @@ local function parse_table_value(ps: ParseState, i: integer): integer, Node, int
    return i, e
 end
 
-local function parse_table_item(ps: ParseState, i: integer, n: integer): integer, Node, integer
+local function parse_table_item(ps: ParseState, i: integer, n?: integer): integer, Node, integer
+   n = n or 1
    local node = new_node(ps.tokens, i, "table_item")
    if ps.tokens[i].kind == "$EOF$" then
       return fail(ps, i, "unexpected eof")
@@ -1408,15 +1414,15 @@ local function parse_table_item(ps: ParseState, i: integer, n: integer): integer
    return i, node, n + 1
 end
 
-local type ParseItem = function<T>(ParseState, integer, integer): integer, T, integer
+local type ParseItem = function<T,S>(ParseState, integer, ?S): integer, T, S
 
 local enum SeparatorMode
    "sep"
    "term"
 end
 
-local function parse_list<T>(ps: ParseState, i: integer, list: {T}, close: {string:boolean}, sep: SeparatorMode, parse_item: ParseItem<T>): integer, {T}
-   local n = 1
+local function parse_list<T,S>(ps: ParseState, i: integer, list: {T}, close: {string:boolean}, sep: SeparatorMode, parse_item: ParseItem<T,S>): integer, {T}
+   local n: S
    while ps.tokens[i].kind ~= "$EOF$" do
       if close[ps.tokens[i].tk] then
          end_at(list as Node, ps.tokens[i])
@@ -1458,7 +1464,7 @@ local function parse_list<T>(ps: ParseState, i: integer, list: {T}, close: {stri
    return i, list
 end
 
-local function parse_bracket_list<T>(ps: ParseState, i: integer, list: {T}, open: string, close: string, sep: SeparatorMode, parse_item: ParseItem<T>): integer, {T}
+local function parse_bracket_list<T,S>(ps: ParseState, i: integer, list: {T}, open: string, close: string, sep: SeparatorMode, parse_item: ParseItem<T,S>): integer, {T}
    i = verify_tk(ps, i, open)
    i = parse_list(ps, i, list, { [close] = true }, sep, parse_item)
    i = verify_tk(ps, i, close)
@@ -1470,14 +1476,14 @@ local function parse_table_literal(ps: ParseState, i: integer): integer, Node
    return parse_bracket_list(ps, i, node, "{", "}", "term", parse_table_item)
 end
 
-local function parse_trying_list<T>(ps: ParseState, i: integer, list: {T}, parse_item: ParseItem<T>): integer, {T}
+local function parse_trying_list<T,S>(ps: ParseState, i: integer, list: {T}, parse_item: ParseItem<T,S>): integer, {T}
    local try_ps: ParseState = {
       filename = ps.filename,
       tokens = ps.tokens,
       errs = {},
       required_modules = ps.required_modules,
    }
-   local tryi, item: integer, T = parse_item(try_ps, i)
+   local tryi, item, n: integer, T = parse_item(try_ps, i)
    if not item then
       return i, list
    end
@@ -1489,14 +1495,16 @@ local function parse_trying_list<T>(ps: ParseState, i: integer, list: {T}, parse
    if ps.tokens[i].tk == "," then
       while ps.tokens[i].tk == "," do
          i = i + 1
-         i, item = parse_item(ps, i)
+         local oldn = n
+         i, item = parse_item(ps, i, n)
+         n = n or oldn
          table.insert(list, item)
       end
    end
    return i, list
 end
 
-local function parse_typearg_type(ps: ParseState, i: integer): integer, Type, integer
+local function parse_typearg_type(ps: ParseState, i: integer): integer, Type, nil
    local backtick = false
    if ps.tokens[i].tk == "`" then
       i = verify_tk(ps, i, "`")
@@ -1511,7 +1519,7 @@ local function parse_typearg_type(ps: ParseState, i: integer): integer, Type, in
    }
 end
 
-local function parse_typevar_type(ps: ParseState, i: integer): integer, Type, integer
+local function parse_typevar_type(ps: ParseState, i: integer): integer, Type
    i = verify_tk(ps, i, "`")
    i = verify_kind(ps, i, "identifier")
    return i, a_type {
@@ -1578,10 +1586,17 @@ local simple_types: {string:Type} = {
    ["integer"] = INTEGER,
 }
 
-local function parse_base_type(ps: ParseState, i: integer): integer, Type, integer
+local simple_opt_types: {string:Type}
+
+local function parse_base_type(ps: ParseState, i: integer): integer, Type
    local tk = ps.tokens[i].tk
    if ps.tokens[i].kind == "identifier" then
-      local st = simple_types[tk]
+      local st: Type
+      if (i > 1 and ps.tokens[i - 1].kind == "?") or (i > 2 and ps.tokens[i - 2].kind == "?") then
+         st = simple_opt_types[tk]
+      else
+         st = simple_types[tk]
+      end
       if st then
          return i + 1, st
       end
@@ -1657,7 +1672,7 @@ local function parse_base_type(ps: ParseState, i: integer): integer, Type, integ
    return fail(ps, i, "expected a type")
 end
 
-parse_type = function(ps: ParseState, i: integer): integer, Type, integer
+parse_type = function(ps: ParseState, i: integer): integer, Type, nil
    if ps.tokens[i].tk == "(" then
       i = i + 1
       local t: Type
@@ -1859,7 +1874,7 @@ do
       [".."] = true,
    }
 
-   local function new_operator(tk: Token, arity: integer, op: string): Operator
+   local function new_operator(tk: Token, arity: integer, op?: string): Operator
       op = op or tk.tk
       return { y = tk.y, x = tk.x, arity = arity, op = op, prec = precedences[arity][op] }
    end
@@ -1996,7 +2011,7 @@ do
             local args = new_node(ps.tokens, i, "expression_list")
             local argument: Node
             if tkop.kind == "string" then
-               argument = new_node(ps.tokens, i)
+               argument = new_node(ps.tokens, i, "string")
                argument.conststr = unquote(tkop.tk)
                i = i + 1
             else
@@ -2141,6 +2156,10 @@ local function parse_argument(ps: ParseState, i: integer): integer, Node, intege
    else
       i, node = verify_kind(ps, i, "identifier", "argument")
    end
+   if ps.tokens[i].tk == "?" then
+      i = i + 1
+      node.opt = true
+   end
    if ps.tokens[i].tk == ":" then
       i = i + 1
       local decltype: Type
@@ -2157,18 +2176,35 @@ end
 parse_argument_list = function(ps: ParseState, i: integer): integer, Node
    local node = new_node(ps.tokens, i, "argument_list")
    i, node = parse_bracket_list(ps, i, node, "(", ")", "sep", parse_argument)
+   local opts = false
    for a, fnarg in ipairs(node) do
       if fnarg.tk == "..." and a ~= #node then
          fail(ps, i, "'...' can only be last argument")
+      end
+      if fnarg.opt then
+         opts = true
+      elseif opts then
+         return fail(ps, i, "non-optional arguments cannot follow optional arguments")
       end
    end
    return i, node
 end
 
-local function parse_argument_type(ps: ParseState, i: integer): integer, Type, integer
+local function parse_argument_type(ps: ParseState, i: integer): integer, Type, nil
    local is_va = false
-   if ps.tokens[i].kind == "identifier" and ps.tokens[i + 1].tk == ":" then
-      i = i + 2
+   local opt = false
+   if ps.tokens[i].kind == "identifier" then
+      if ps.tokens[i + 1].tk == "?" then
+         opt = true
+         if ps.tokens[i + 2].tk == ":" then
+            i = i + 3
+         end
+      elseif ps.tokens[i + 1].tk == ":" then
+         i = i + 2
+      end
+   elseif ps.tokens[i].kind == "?" then
+      opt = true
+      i = i + 1
    elseif ps.tokens[i].tk == "..." then
       if ps.tokens[i + 1].tk == ":" then
          i = i + 2
@@ -2180,11 +2216,12 @@ local function parse_argument_type(ps: ParseState, i: integer): integer, Type, i
 
    local typ: Type; i, typ = parse_type(ps, i)
    if typ then
+      typ.opt = opt
       -- HACK: we're storing the attribute in the wrong node during the iteration...
       typ.is_va = is_va
    end
 
-   return i, typ, 0
+   return i, typ
 end
 
 parse_argument_type_list = function(ps: ParseState, i: integer): integer, Type
@@ -2256,7 +2293,7 @@ local function parse_global_function(ps: ParseState, i: integer): integer, Node
    return i, fn
 end
 
-local function parse_if_block(ps: ParseState, i: integer, n: integer, node: Node, is_else: boolean): integer, Node
+local function parse_if_block(ps: ParseState, i: integer, n: integer, node: Node, is_else?: boolean): integer, Node
    local block = new_node(ps.tokens, i, "if_block")
    i = i + 1
    block.if_parent = node
@@ -2874,7 +2911,7 @@ local parse_statement_fns: {string : function(ParseState, integer):(integer, Nod
    ["function"] = parse_global_function,
 }
 
-parse_statements = function(ps: ParseState, i: integer, toplevel: boolean): integer, Node
+parse_statements = function(ps: ParseState, i: integer, toplevel?: boolean): integer, Node
    local node = new_node(ps.tokens, i, "statements")
    local item: Node
    while true do
@@ -2957,11 +2994,11 @@ end
 --------------------------------------------------------------------------------
 
 local record VisitorCallbacks<N, T>
-   before: function(N, {T})
+   before: function(N, ?{T})
    before_expressions: function({N}, {T})
    before_statements: function({N}, {T})
    before_e2: function({N}, {T})
-   after: function(N, {T}, T): T
+   after: function(N, {T}, ?T): T
 end
 
 local enum VisitorExtraCallback
@@ -2980,7 +3017,7 @@ local enum MetaMode
    "meta"
 end
 
-local function fields_of(t: Type, meta: MetaMode): (function(): string, Type)
+local function fields_of(t: Type, meta?: MetaMode): (function(): string, Type)
    local i = 1
    local field_order = meta and t.meta_field_order or t.field_order
    local fields = meta and t.meta_fields or t.fields
@@ -3412,7 +3449,7 @@ local primitive: {TypeName:string} = {
    ["thread"] = "thread",
 }
 
-function tl.pretty_print_ast(ast: Node, mode: boolean | PrettyPrintOpts): string
+function tl.pretty_print_ast(ast: Node, mode?: boolean | PrettyPrintOpts): string
    local indent = 0
 
    local opts: PrettyPrintOpts
@@ -3471,7 +3508,7 @@ function tl.pretty_print_ast(ast: Node, mode: boolean | PrettyPrintOpts): string
       end
    end
 
-   local function add_child(out: Output, child: Output, space: string, current_indent: integer): integer
+   local function add_child(out: Output, child: Output, space?: string, current_indent?: integer): integer
       if #child == 0 then
          return
       end
@@ -4303,7 +4340,7 @@ local function is_unknown(t: Type): boolean
        or t.typename == "unresolved_emptytable_value"
 end
 
-local show_type: function(Type, boolean, {Type:string}): string
+local show_type: function(Type, ?boolean, ?{Type:string}): string
 
 local function show_type_base(t: Type, short: boolean, seen: {Type:string}): string
    -- FIXME this is a control for recursively built types, which should in principle not exist
@@ -4413,7 +4450,7 @@ local function show_type_base(t: Type, short: boolean, seen: {Type:string}): str
       end
       for i, v in ipairs(t.args) do
          if not t.is_method or i > 1 then
-            table.insert(args, (i == #t.args and t.args.is_va and "...: " or "") .. show(v))
+            table.insert(args, (i == #t.args and t.args.is_va and "...: " or "") .. (v.opt and "? " or "") .. show(v))
          end
       end
       table.insert(out, table.concat(args, ", "))
@@ -4466,7 +4503,7 @@ local function inferred_msg(t: Type): string
    return " (inferred at "..t.inferred_at_file..":"..t.inferred_at.y..":"..t.inferred_at.x..")"
 end
 
-show_type = function(t: Type, short: boolean, seen: {Type:string}): string
+show_type = function(t: Type, short?: boolean, seen?: {Type:string}): string
    seen = seen or {}
    local ret = show_type_base(t, short, seen)
    if t.inferred_at then
@@ -4652,7 +4689,7 @@ local bit_operators: {string:string} = {
    ["<<"] = "lshift",
 }
 
-local function convert_node_to_compat_call(node: Node, mod_name: string, fn_name: string, e1: Node, e2: Node)
+local function convert_node_to_compat_call(node: Node, mod_name: string, fn_name: string, e1: Node, e2?: Node)
    node.op.op = "@funcall"
    node.op.arity = 2
    node.op.prec = 100
@@ -4664,7 +4701,7 @@ local function convert_node_to_compat_call(node: Node, mod_name: string, fn_name
    node.e2[2] = e2
 end
 
-local function convert_node_to_compat_mt_call(node: Node, mt_name: string, which_self: integer, e1: Node, e2: Node)
+local function convert_node_to_compat_mt_call(node: Node, mt_name: string, which_self: integer, e1: Node, e2?: Node)
    node.op.op = "@funcall"
    node.op.arity = 2
    node.op.prec = 100
@@ -4747,19 +4784,33 @@ local function init_globals(lax: boolean): {string:Variable}, {string:Type}
       rets = TUPLE {},
    }
 
-   local TABLE_SORT_FUNCTION = a_type { typename = "function", typeargs = TUPLE { ARG_ALPHA }, args = TUPLE { ALPHA, ALPHA }, rets = TUPLE { BOOLEAN } }
+	local OPT_NIL = a_type { opt = true, typename = "nil" }
+	local OPT_ANY = a_type { opt = true, typename = "any" }
+	local OPT_TABLE = a_type { opt = true, typename = "map", keys = ANY, values = ANY }
+	local OPT_NUMBER = a_type { opt = true, typename = "number" }
+	local OPT_STRING = a_type { opt = true, typename = "string" }
+	local OPT_THREAD = a_type { opt = true, typename = "thread" }
+	local OPT_BOOLEAN = a_type { opt = true, typename = "boolean" }
+	local OPT_INTEGER = a_type { opt = true, typename = "integer" }
 
-   -- placeholders for when we have optional arity annotations
-   local OPT_NUMBER = NUMBER
-   local OPT_STRING = STRING
-   local OPT_THREAD = THREAD
-   local OPT_ALPHA = ALPHA
-   local OPT_BETA = BETA
-   local OPT_TABLE = TABLE
-   local OPT_UNION = UNION
-   local OPT_BOOLEAN = BOOLEAN
-   local OPT_NOMINAL_FILE = NOMINAL_FILE
-   local OPT_TABLE_SORT_FUNCTION = TABLE_SORT_FUNCTION
+   simple_opt_types = {
+      ["nil"] = OPT_NIL,
+      ["any"] = OPT_ANY,
+      ["table"] = OPT_TABLE,
+      ["number"] = OPT_NUMBER,
+      ["string"] = OPT_STRING,
+      ["thread"] = OPT_THREAD,
+      ["boolean"] = OPT_BOOLEAN,
+      ["integer"] = OPT_INTEGER,
+   }
+
+   local OPT_ALPHA = a_type { opt = true, typename = "typevar", typevar = "@a" }
+   local OPT_BETA = a_type { opt = true, typename = "typevar", typevar = "@b" }
+   local OPT_NOMINAL_FILE = a_type { opt = true, typename = "nominal", names = {"FILE"} }
+   local OPT_TABLE_SORT_FUNCTION = a_type { opt = true, typename = "function", args = { ALPHA, ALPHA }, rets = { BOOLEAN } }
+   local function OPT_UNION(t: {Type}): Type
+      return a_type { opt = true, typename = "union", types = t }
+   end
 
    local standard_library: {string:Type} = {
       ["..."] = VARARG { STRING },
@@ -4776,7 +4827,7 @@ local function init_globals(lax: boolean): {string:Variable}, {string:Type}
          }
       },
       ["dofile"] = a_type { typename = "function", args = TUPLE { OPT_STRING }, rets = VARARG { ANY } },
-      ["error"] = a_type { typename = "function", args = TUPLE { ANY, NUMBER }, rets = TUPLE {} },
+      ["error"] = a_type { typename = "function", args = TUPLE { ANY, OPT_NUMBER }, rets = TUPLE {} },
       ["getmetatable"] = a_type { typename = "function", typeargs = TUPLE { ARG_ALPHA }, args = TUPLE { ALPHA }, rets = TUPLE { NOMINAL_METATABLE_OF_ALPHA } },
       ["ipairs"] = a_type { typename = "function", typeargs = TUPLE { ARG_ALPHA }, args = TUPLE { ARRAY_OF_ALPHA }, rets = TUPLE {
          a_type { typename = "function", args = TUPLE {}, rets = TUPLE { INTEGER, ALPHA } },
@@ -4834,10 +4885,10 @@ local function init_globals(lax: boolean): {string:Variable}, {string:Type}
             fields = {
                ["close"] = a_type { typename = "function", args = TUPLE { NOMINAL_FILE }, rets = TUPLE { BOOLEAN, STRING} },
                ["flush"] = a_type { typename = "function", args = TUPLE { NOMINAL_FILE }, rets = TUPLE {} },
-               ["lines"] = a_type { typename = "function", args = VARARG { NOMINAL_FILE, a_type { typename = "union", types = { STRING, NUMBER } } }, rets = TUPLE {
+               ["lines"] = a_type { typename = "function", args = VARARG { NOMINAL_FILE, a_type { opt = true, typename = "union", types = { STRING, NUMBER } } }, rets = TUPLE {
                   a_type { typename = "function", args = TUPLE {}, rets = VARARG { STRING } },
                } },
-               ["read"] = a_type { typename = "function", args = TUPLE { NOMINAL_FILE, UNION { STRING, NUMBER } }, rets = TUPLE { STRING, STRING } },
+               ["read"] = a_type { typename = "function", args = TUPLE { NOMINAL_FILE, OPT_UNION { STRING, NUMBER } }, rets = TUPLE { STRING, STRING } },
                ["seek"] = a_type { typename = "function", args = TUPLE { NOMINAL_FILE, OPT_STRING, OPT_NUMBER }, rets = TUPLE { INTEGER, STRING } },
                ["setvbuf"] = a_type { typename = "function", args = TUPLE { NOMINAL_FILE, STRING, OPT_NUMBER }, rets = TUPLE {} },
                ["write"] = a_type { typename = "function", args = VARARG { NOMINAL_FILE, STRING }, rets = TUPLE { NOMINAL_FILE, STRING } },
@@ -4851,7 +4902,7 @@ local function init_globals(lax: boolean): {string:Variable}, {string:Type}
             typename = "record",
             typeargs = TUPLE { ARG_ALPHA },
             fields = {
-               ["__call"] = a_type { typename = "function", args = VARARG { ALPHA, ANY }, rets = VARARG { ANY } },
+               ["__call"] = a_type { typename = "function", args = TUPLE { ALPHA }, rets = VARARG { ANY } },
                ["__gc"] = a_type { typename = "function", args = TUPLE { ALPHA }, rets = TUPLE {} },
                ["__index"] = ANY, -- FIXME: function | table | anything with an __index metamethod
                ["__len"] = a_type { typename = "function", args = TUPLE { ALPHA }, rets = TUPLE { ANY } },
@@ -4968,13 +5019,13 @@ local function init_globals(lax: boolean): {string:Variable}, {string:Type}
             ["close"] = a_type { typename = "function", args = TUPLE { OPT_NOMINAL_FILE }, rets = TUPLE { BOOLEAN, STRING } },
             ["flush"] = a_type { typename = "function", args = TUPLE {}, rets = TUPLE {} },
             ["input"] = a_type { typename = "function", args = TUPLE { OPT_UNION { STRING, NOMINAL_FILE } }, rets = TUPLE { NOMINAL_FILE } },
-            ["lines"] = a_type { typename = "function", args = VARARG { OPT_STRING, a_type { typename = "union", types = { STRING, NUMBER } } }, rets = TUPLE {
+            ["lines"] = a_type { typename = "function", args = VARARG { OPT_STRING, a_type { opt = true, typename = "union", types = { STRING, NUMBER } } }, rets = TUPLE {
                a_type { typename = "function", args = TUPLE {}, rets = VARARG { STRING } },
             } },
-            ["open"] = a_type { typename = "function", args = TUPLE { STRING, STRING }, rets = TUPLE { NOMINAL_FILE, STRING } },
+            ["open"] = a_type { typename = "function", args = TUPLE { STRING, OPT_STRING }, rets = TUPLE { NOMINAL_FILE, STRING } },
             ["output"] = a_type { typename = "function", args = TUPLE { OPT_UNION { STRING, NOMINAL_FILE } }, rets = TUPLE { NOMINAL_FILE } },
-            ["popen"] = a_type { typename = "function", args = TUPLE { STRING, STRING }, rets = TUPLE { NOMINAL_FILE, STRING } },
-            ["read"] = a_type { typename = "function", args = TUPLE { UNION { STRING, NUMBER } }, rets = TUPLE { STRING, STRING } },
+            ["popen"] = a_type { typename = "function", args = TUPLE { STRING, OPT_STRING }, rets = TUPLE { NOMINAL_FILE, STRING } },
+            ["read"] = a_type { typename = "function", args = TUPLE { OPT_UNION { STRING, NUMBER } }, rets = TUPLE { STRING, STRING } },
             ["stderr"] = NOMINAL_FILE,
             ["stdin"] = NOMINAL_FILE,
             ["stdout"] = NOMINAL_FILE,
@@ -5013,7 +5064,7 @@ local function init_globals(lax: boolean): {string:Variable}, {string:Type}
             ["frexp"] = a_type { typename = "function", args = TUPLE { NUMBER }, rets = TUPLE { NUMBER, NUMBER } },
             ["huge"] = NUMBER,
             ["ldexp"] = a_type { typename = "function", args = TUPLE { NUMBER, NUMBER }, rets = TUPLE { NUMBER } },
-            ["log"] = a_type { typename = "function", args = TUPLE { NUMBER, NUMBER }, rets = TUPLE { NUMBER } },
+            ["log"] = a_type { typename = "function", args = TUPLE { NUMBER, OPT_NUMBER }, rets = TUPLE { NUMBER } },
             ["log10"] = a_type { typename = "function", args = TUPLE { NUMBER }, rets = TUPLE { NUMBER } },
             ["max"] = a_type {
                typename = "poly",
@@ -5042,7 +5093,7 @@ local function init_globals(lax: boolean): {string:Variable}, {string:Type}
             ["random"] = a_type {
                typename = "poly",
                types = {
-                  a_type { typename = "function", args = TUPLE { NUMBER, NUMBER }, rets = TUPLE { INTEGER } },
+                  a_type { typename = "function", args = TUPLE { NUMBER, OPT_NUMBER }, rets = TUPLE { INTEGER } },
                   a_type { typename = "function", args = TUPLE {}, rets = TUPLE { NUMBER } },
                }
             },
@@ -5065,13 +5116,13 @@ local function init_globals(lax: boolean): {string:Variable}, {string:Type}
                typename = "poly",
                types = {
                   a_type { typename = "function", args = TUPLE {}, rets = TUPLE { STRING } },
-                  a_type { typename = "function", args = TUPLE { OS_DATE_TABLE_FORMAT, NUMBER }, rets = TUPLE { OS_DATE_TABLE } },
+                  a_type { typename = "function", args = TUPLE { OS_DATE_TABLE_FORMAT, OPT_NUMBER }, rets = TUPLE { OS_DATE_TABLE } },
                   a_type { typename = "function", args = TUPLE { OPT_STRING, OPT_NUMBER }, rets = TUPLE { STRING } },
                }
             },
             ["difftime"] = a_type { typename = "function", args = TUPLE { NUMBER, NUMBER }, rets = TUPLE { NUMBER } },
             ["execute"] = a_type { typename = "function", args = TUPLE { STRING }, rets = TUPLE { BOOLEAN, STRING, INTEGER } },
-            ["exit"] = a_type { typename = "function", args = TUPLE { UNION { NUMBER, BOOLEAN }, BOOLEAN }, rets = TUPLE {} },
+            ["exit"] = a_type { typename = "function", args = TUPLE { OPT_UNION { NUMBER, BOOLEAN }, OPT_BOOLEAN }, rets = TUPLE {} },
             ["getenv"] = a_type { typename = "function", args = TUPLE { STRING }, rets = TUPLE { STRING } },
             ["remove"] = a_type { typename = "function", args = TUPLE { STRING }, rets = TUPLE { BOOLEAN, STRING } },
             ["rename"] = a_type { typename = "function", args = TUPLE { STRING, STRING}, rets = TUPLE { BOOLEAN, STRING } },
@@ -5130,8 +5181,8 @@ local function init_globals(lax: boolean): {string:Variable}, {string:Type}
             ["gsub"] = a_type {
                typename = "poly",
                types = {
-                  a_type { typename = "function", args = TUPLE { STRING, STRING, STRING, NUMBER }, rets = TUPLE { STRING, INTEGER } },
-                  a_type { typename = "function", args = TUPLE { STRING, STRING, a_type { typename = "map", keys = STRING, values = STRING }, NUMBER }, rets = TUPLE { STRING, INTEGER } },
+                  a_type { typename = "function", args = TUPLE { STRING, STRING, OPT_STRING, OPT_NUMBER }, rets = TUPLE { STRING, INTEGER } },
+                  a_type { typename = "function", args = TUPLE { STRING, STRING, a_type { typename = "map", keys = STRING, values = STRING }, OPT_NUMBER }, rets = TUPLE { STRING, INTEGER } },
                   a_type { typename = "function", args = TUPLE { STRING, STRING, a_type { typename = "function", args = VARARG { STRING }, rets = TUPLE { STRING } } }, rets = TUPLE { STRING, INTEGER } },
                   a_type { typename = "function", args = TUPLE { STRING, STRING, a_type { typename = "function", args = VARARG { STRING }, rets = TUPLE { NUMBER } } }, rets = TUPLE { STRING, INTEGER } },
                   a_type { typename = "function", args = TUPLE { STRING, STRING, a_type { typename = "function", args = VARARG { STRING }, rets = TUPLE { BOOLEAN } } }, rets = TUPLE { STRING, INTEGER } },
@@ -5141,12 +5192,12 @@ local function init_globals(lax: boolean): {string:Variable}, {string:Type}
             },
             ["len"] = a_type { typename = "function", args = TUPLE { STRING }, rets = TUPLE { INTEGER } },
             ["lower"] = a_type { typename = "function", args = TUPLE { STRING }, rets = TUPLE { STRING } },
-            ["match"] = a_type { typename = "function", args = TUPLE { STRING, STRING, NUMBER }, rets = VARARG { STRING } },
+            ["match"] = a_type { typename = "function", args = TUPLE { STRING, OPT_STRING, OPT_NUMBER }, rets = VARARG { STRING } },
             ["pack"] = a_type { typename = "function", args = VARARG { STRING, ANY }, rets = TUPLE { STRING } },
             ["packsize"] = a_type { typename = "function", args = TUPLE { STRING }, rets = TUPLE { INTEGER } },
             ["rep"] = a_type { typename = "function", args = TUPLE { STRING, NUMBER }, rets = TUPLE { STRING } },
             ["reverse"] = a_type { typename = "function", args = TUPLE { STRING }, rets = TUPLE { STRING } },
-            ["sub"] = a_type { typename = "function", args = TUPLE { STRING, NUMBER, NUMBER }, rets = TUPLE { STRING } },
+            ["sub"] = a_type { typename = "function", args = TUPLE { STRING, NUMBER, OPT_NUMBER }, rets = TUPLE { STRING } },
             ["unpack"] = a_type { typename = "function", args = TUPLE { STRING, STRING, OPT_NUMBER }, rets = VARARG { ANY } },
             ["upper"] = a_type { typename = "function", args = TUPLE { STRING }, rets = TUPLE { STRING } },
          },
@@ -5172,7 +5223,7 @@ local function init_globals(lax: boolean): {string:Variable}, {string:Type}
             ["pack"] = a_type { typename = "function", args = VARARG { ANY }, rets = TUPLE { TABLE } },
             ["remove"] = a_type { typename = "function", typeargs = TUPLE { ARG_ALPHA }, args = TUPLE { ARRAY_OF_ALPHA, OPT_NUMBER }, rets = TUPLE { ALPHA } },
             ["sort"] = a_type { typename = "function", typeargs = TUPLE { ARG_ALPHA }, args = TUPLE { ARRAY_OF_ALPHA, OPT_TABLE_SORT_FUNCTION }, rets = TUPLE {} },
-            ["unpack"] = a_type { typename = "function", needs_compat = true, typeargs = TUPLE { ARG_ALPHA }, args = TUPLE { ARRAY_OF_ALPHA, NUMBER, NUMBER }, rets = VARARG { ALPHA } },
+            ["unpack"] = a_type { typename = "function", needs_compat = true, typeargs = TUPLE { ARG_ALPHA }, args = TUPLE { ARRAY_OF_ALPHA, OPT_NUMBER, OPT_NUMBER }, rets = VARARG { ALPHA } },
          },
       },
       ["utf8"] = a_type {
@@ -5219,7 +5270,7 @@ local function init_globals(lax: boolean): {string:Variable}, {string:Type}
    return globals, standard_library
 end
 
-tl.init_env = function(lax: boolean, gen_compat: boolean | CompatMode, gen_target: TargetMode, predefined: {string}): Env, string
+tl.init_env = function(lax?: boolean, gen_compat?: boolean | CompatMode, gen_target?: TargetMode, predefined?: {string}): Env, string
    if gen_compat == true or gen_compat == nil then
       gen_compat = "optional"
    elseif gen_compat == false then
@@ -5286,7 +5337,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result
 
    local module_type: Type
 
-   local function find_var(name: string, raw: boolean): Variable
+   local function find_var(name: string, raw?: boolean): Variable
       for i = #st, 1, -1 do
          local scope = st[i]
          if scope[name] then
@@ -5316,7 +5367,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result
       }, false
    end
 
-   local function find_var_type(name: string, raw: boolean): Type, boolean
+   local function find_var_type(name: string, raw?: boolean): Type, boolean
       local var = find_var(name, raw)
       if var then
          return var.t, var.is_const
@@ -5355,7 +5406,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result
       end
    end
 
-   local function find_type(names: {string}, accept_typearg: boolean): Type
+   local function find_type(names: {string}, accept_typearg?: boolean): Type
       local typ = find_var_type(names[1])
       if not typ then
          return nil
@@ -5501,6 +5552,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result
          local copy: Type = {}
          seen[orig_t] = copy
 
+         copy.opt = orig_t.opt
          copy.typename = t.typename
          copy.filename = t.filename
          copy.typeid = t.typeid
@@ -5535,6 +5587,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result
             end
 
             copy.is_method = t.is_method
+            copy.min_arity = t.min_arity
             copy.args = resolve(t.args)
             copy.rets = resolve(t.rets)
          elseif t.typename == "record" or t.typename == "arrayrecord" then
@@ -5717,7 +5770,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result
       node.symbol_list_slot = symbol_list_n
    end
 
-   local function add_var(node: Node, var: string, valtype: Type, is_const: boolean, is_narrowing: boolean, dont_check_redeclaration): Variable
+   local function add_var(node: Node, var: string, valtype: Type, is_const?: boolean, is_narrowing?: boolean, dont_check_redeclaration?): Variable
       if lax and node and is_unknown(valtype) and (var ~= "self" and var ~= "...") and not is_narrowing then
          add_unknown(node, var)
       end
@@ -5768,7 +5821,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result
       return scope[var]
    end
 
-   local type CompareTypes = function(Type, Type, boolean): boolean, {Error}
+   local type CompareTypes = function(Type, Type, ?boolean): boolean, {Error}
 
    local function compare_and_infer_typevars(t1: Type, t2: Type, comp: CompareTypes): boolean, {Error}
       -- if both are typevars and they are the same variable, nothing to do here
@@ -5803,7 +5856,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result
       end
    end
 
-   local function add_errs_prefixing(src: {Error}, dst: {Error}, prefix: string, node: Node)
+   local function add_errs_prefixing(src: {Error}, dst: {Error}, prefix: string, node?: Node)
       if not src then
          return
       end
@@ -5825,11 +5878,11 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result
       end
    end
 
-   local is_a: function(Type, Type, boolean): boolean, {Error}
+   local is_a: function(Type, Type, ?boolean): boolean, {Error}
 
    local type TypeGetter = function(string): Type
 
-   local function match_record_fields(t1: Type, t2: TypeGetter, cmp: CompareTypes): boolean, {Error}
+   local function match_record_fields(t1: Type, t2: TypeGetter, cmp?: CompareTypes): boolean, {Error}
       cmp = cmp or is_a
       local fielderrs: {Error} = {}
       for _, k in ipairs(t1.field_order) do
@@ -5850,7 +5903,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result
       return true
    end
 
-   local function match_fields_to_record(t1: Type, t2: Type, cmp: CompareTypes): boolean, {Error}
+   local function match_fields_to_record(t1: Type, t2: Type, cmp?: CompareTypes): boolean, {Error}
       if t1.is_userdata ~= t2.is_userdata then
          return false, {error_in_type(t1, "userdata record doesn't match: ", t2)}
       end
@@ -5954,7 +6007,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result
       end
    end
 
-   local function begin_scope(node: Node)
+   local function begin_scope(node?: Node)
       table.insert(st, {})
 
       if node then
@@ -5963,7 +6016,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result
       end
    end
 
-   local function end_scope(node: Node)
+   local function end_scope(node?: Node)
       local unresolved = st[#st]["@unresolved"]
       if unresolved then
          local upper = st[#st - 1]["@unresolved"]
@@ -6296,6 +6349,13 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result
          local all_errs = {}
          for i = 1, #t1.args do
             arg_check(same_type, t1.args[i], t2.args[i], t1 as Node, i, all_errs)
+            local t1opt = not not t1.args[i].opt
+            local t2opt = not not t2.args[i].opt
+            if t1opt ~= t2opt then
+               return false, terr(t1, "argument " .. i .. ": got " ..
+                  (t1opt and "optional" or "non-optional") .. ", expected " ..
+                  (t2opt and "optional" or "non-optional"))
+            end
          end
          for i = 1, #t1.rets do
             local _, errs = same_type(t1.rets[i], t2.rets[i])
@@ -6313,7 +6373,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result
       return true
    end
 
-   local function unite(types: {Type}, flatten_constants: boolean): Type
+   local function unite(types: {Type}, flatten_constants?: boolean): Type
       if #types == 1 then
          return types[1]
       end
@@ -6425,8 +6485,38 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result
       return arr_type
    end
 
+   local function set_min_arity(t: Type): number
+      local min_arity = 0
+      for i, a in ipairs(t.args) do
+         if not a.opt then
+            min_arity = i
+         end
+      end
+      if t.args.is_va then
+         min_arity = min_arity - 1
+      end
+      t.min_arity = min_arity
+      return min_arity
+   end
+
+   local function function_args_arity_message(f: Type, given: number): string
+      local arity = #f.args
+      local min_arity = f.min_arity or set_min_arity(f)
+      if f.is_va then
+         return "at least " .. min_arity
+      elseif min_arity < arity then
+         if given > arity then
+            return "at most " .. arity
+         else
+            return "from " .. min_arity .. " to " .. arity
+         end
+      else
+         return tostring(arity)
+      end
+   end
+
    -- subtyping comparison
-   is_a = function(t1: Type, t2: Type, for_equality: boolean): boolean, {Error}
+   is_a = function(t1: Type, t2: Type, for_equality?: boolean): boolean, {Error}
       assert(type(t1) == "table")
       assert(type(t2) == "table")
 
@@ -6693,11 +6783,25 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result
          end
       elseif t1.typename == "function" and t2.typename == "function" then
          local all_errs = {}
-         if (not t2.args.is_va) and #t1.args > #t2.args then
-            table.insert(all_errs, error_in_type(t1, "incompatible number of arguments: got " .. #t1.args .. " %s, expected " .. #t2.args .. " %s", t1.args, t2.args))
+         local t1_min_arity = t1.min_arity or set_min_arity(t1)
+         local t2_min_arity = t1.min_arity or set_min_arity(t2)
+
+         if (not t2.args.is_va) and t1_min_arity > t2_min_arity then
+            local expected = function_args_arity_message(t2, #t1.args)
+            table.insert(all_errs, error_in_type(t1, "incompatible number of arguments: got " .. #t1.args .. " %s, expected " .. expected .. " %s", t1.args, t2.args))
          else
-            for i = (t1.is_method and 2 or 1), #t1.args do
-               arg_check(is_a, t1.args[i], t2.args[i] or ANY, nil, i, all_errs)
+            local t1nargs = #t1.args
+            local t2nargs = #t2.args
+            for i = (t1.is_method and 2 or 1), t1nargs do
+               local t1a = t1.args[i]
+               local t2a = t2.args[i] or (t2.args.is_va and t2.args[#t2.args])
+               local t1aopt = t1a and (t1a.opt or (t1.args.is_va and i >= t1nargs))
+               local t2aopt = t2a and (t2a.opt or (t2.args.is_va and i >= t2nargs))
+               if not t1aopt and t2aopt then
+                  table.insert(all_errs, error_in_type(t1, "argument " .. i .." is non-optional, but is optional in expected type %s", t2))
+					else
+                  arg_check(is_a, t1a, t2a or ANY, nil, i, all_errs)
+               end
             end
          end
          local diff_by_va = #t2.rets - #t1.rets == 1 and t2.rets.is_va
@@ -6728,7 +6832,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result
       return false, terr(t1, "got %s, expected %s", t1, t2)
    end
 
-   local function assert_is_a(node: Node, t1: Type, t2: Type, context: string, name: string): boolean
+   local function assert_is_a(node: Node, t1: Type, t2: Type, context: string, name?: string): boolean
       t1 = resolve_tuple(t1)
       t2 = resolve_tuple(t2)
       if lax and (is_unknown(t1) or is_unknown(t2)) then
@@ -6768,7 +6872,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result
       end
    end
 
-   local function resolve_for_call(node: Node, func: Type, args: {Type}, is_method: boolean): Type, boolean
+   local function resolve_for_call(node: Node, func: Type, args: {Type}, is_method?: boolean): Type, boolean
       -- resolve unknown in lax mode, produce a general unknown function
       if lax and is_unknown(func) then
          func = a_type { typename = "function", args = VARARG { UNKNOWN }, rets = VARARG { UNKNOWN } }
@@ -6793,7 +6897,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result
       return func, is_method
    end
 
-   local type_check_function_call: function(Node, Type, {Type}, boolean, integer): Type
+   local type_check_function_call: function(Node, Type, {Type}, boolean, ?integer): Type
    do
       local function mark_invalid_typeargs(f: Type)
          if f.typeargs then
@@ -6866,7 +6970,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result
             local expects: {string} = {}
             if func.typename == "poly" then
                for _, f in ipairs(func.types) do
-                  table.insert(expects, tostring(#f.args or 0))
+                  table.insert(expects, function_args_arity_message(f, nargs))
                end
                table.sort(expects)
                for i = #expects, 1, -1 do
@@ -6875,7 +6979,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result
                   end
                end
             else
-               table.insert(expects, tostring(#func.args or 0))
+               table.insert(expects, function_args_arity_message(func, nargs))
             end
             node_error(node, "wrong number of arguments (given " .. nargs .. ", expects " .. table.concat(expects, " or ") .. ")")
          end
@@ -6917,15 +7021,16 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result
                      return node_error(node, "invoked method as a regular function: use ':' instead of '.'")
                   end
                   local expected = #f.args
+                  local min_arity = f.min_arity or set_min_arity(f)
 
                   -- simple functions:
-                  if (is_func and (given <= expected or (f.args.is_va and given > expected)))
-                  -- poly, pass 1: try exact arity matches first
-                  or (is_poly and ((pass == 1 and given == expected)
-                  -- poly, pass 2: then try adjusting with nils to missing arguments or using '...'
-                                or (pass == 2 and given < expected)
-                  -- poly, pass 3: then finally try vararg functions
-                                or (pass == 3 and f.args.is_va and given > expected)))
+                  if (is_func and ((given >= min_arity and given <= expected) or (f.args.is_va and given > expected)))
+                     -- poly, pass 1: try exact arity matches first
+                     or (is_poly and ((pass == 1 and given == expected)
+                     -- poly, pass 2: then try adjusting with nils to missing arguments or using '...'
+                     or (pass == 2 and given < expected and (lax or given >= min_arity))
+                     -- poly, pass 3: then finally try vararg functions
+                     or (pass == 3 and f.args.is_va and given > expected)))
                   then
                      local matched, errs = try_match_func_args(node, f, args, argdelta)
                      if matched then
@@ -6947,7 +7052,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result
          return fail_call(node, func, given, first_errs)
       end
 
-      type_check_function_call = function(node: Node, func: Type, args: {Type}, is_method: boolean, argdelta: integer): Type
+      type_check_function_call = function(node: Node, func: Type, args: {Type}, is_method: boolean, argdelta?: integer): Type
          begin_scope()
          local ret = check_call(node, func, args, is_method, argdelta)
          end_scope()
@@ -7055,7 +7160,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result
       end
    end
 
-   local function add_global(node: Node, var: string, valtype: Type, is_const: boolean)
+   local function add_global(node: Node, var: string, valtype: Type, is_const?: boolean)
       if lax and is_unknown(valtype) and (var ~= "self" and var ~= "...") then
          add_unknown(node, var)
       end
@@ -7352,7 +7457,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result
 
    -- Inference engine for 'is' operator
    local facts_and: function(f1: Fact, f2: Fact, where: Node): Fact
-   local facts_or: function(f1: Fact, f2: Fact, where: Node): Fact
+   local facts_or: function(f1: Fact, f2: Fact, where?: Node): Fact
    local facts_not: function(f1: Fact, where: Node): Fact
    local apply_facts: function(where: Node, known: Fact)
    local FACT_TRUTHY: Fact
@@ -7385,7 +7490,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result
          return Fact({ fact = "and", f1 = f1, f2 = f2, where = where })
       end
 
-      facts_or = function(f1: Fact, f2: Fact, where: Node): Fact
+      facts_or = function(f1: Fact, f2: Fact, where?: Node): Fact
          if f1 and f2 then
             return Fact { fact = "or", f1 = f1, f2 = f2, where = where }
          else
@@ -7752,7 +7857,6 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result
    }
 
    type_check_funcall = function(node: Node, a: Type, b: {Type}, argdelta: integer): Type
-      argdelta = argdelta or 0
       if node.e1.kind == "variable" then
          local special = special_functions[node.e1.tk]
          if special then
@@ -8775,7 +8879,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result
                   end
                end
             elseif node.op.op == "@funcall" then
-               node.type = type_check_funcall(node, a, b)
+               node.type = type_check_funcall(node, a, b, 0)
             elseif node.op.op == "@index" then
                node.type = type_check_index(node, node.e2, a, b)
             elseif node.op.op == "as" then
@@ -8989,6 +9093,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result
                t = a_type { typename = "tuple", is_va = true, t }
             end
             add_var(node, node.tk, t).is_func_arg = true
+            node.type.opt = node.opt
             return node.type
          end,
       },
@@ -9536,7 +9641,7 @@ tl.process = function(filename: string, env: Env): Result, string
    return tl.process_string(input, is_lua, env, filename)
 end
 
-function tl.process_string(input: string, is_lua: boolean, env: Env, filename: string): Result
+function tl.process_string(input: string, is_lua: boolean, env: Env, filename?: string): Result
 
    env = env or tl.init_env(is_lua)
    if env.loaded and env.loaded[filename] then

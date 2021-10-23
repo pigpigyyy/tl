@@ -17,7 +17,7 @@ describe("record method call", function()
    ]])
 
    it("method call with different call forms", util.check [[
-      local foo = {bar = function(x: any, t: any) end}
+      local foo = {bar = function(x?: any, t?: any) end}
       print(foo:bar())
       print(foo:bar{})
       print(foo:bar"hello")
@@ -54,7 +54,7 @@ describe("record method call", function()
          end
 
          function SW:writef(fmt,...)
-            self:write(fmt:format(...))
+            self:write(fmt:format(...), nil)
          end
       ]], {
          { msg = "arg1" },

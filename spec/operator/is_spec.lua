@@ -253,7 +253,7 @@ describe("flow analysis with is", function()
 
          local function f(d: any): any
             if d is string and func(d, "a") then
-               local d = func(d)
+               local d = func(d, "")
             elseif d is string and func(d, "b") then
                return d .. "???"
             else
@@ -270,7 +270,7 @@ describe("flow analysis with is", function()
          local function f(d: any): any
             local d = d as (number | string | function)
             if d is string and func(d, "a") then
-               local d = func(d)
+               local d = func(d, "")
             elseif d is string and func(d, "b") then
                return d .. "???"
             else
