@@ -4642,6 +4642,10 @@ local function add_compat_entries(program: Node, used_set: {string: boolean}, ge
          load_code(name, "local bit32 = bit32; if not bit32 then local p, m = " .. req("bit32") .. "; if p then bit32 = m end")
       elseif name == "mt" then
          load_code(name, "local _tl_mt = function(m, s, a, b) return (getmetatable(s == 1 and a or b)[m](a, b) end")
+      elseif name == "math.maxinteger" then
+         load_code(name, "local _tl_math_maxinteger = math.maxinteger or math.pow(2,53)")
+      elseif name == "math.mininteger" then
+         load_code(name, "local _tl_math_mininteger = math.mininteger or -math.pow(2,53) - 1")
       else
          if not compat_loaded then
             load_code("compat", "local _tl_compat; if (tonumber((_VERSION or ''):match('[%d.]*$')) or 0) < 5.3 then local p, m = " .. req("compat53.module") .. "; if p then _tl_compat = m end")
@@ -5075,7 +5079,7 @@ local function init_globals(lax: boolean): {string:Variable}, {string:Type}
                   a_type { typename = "function", args = VARARG { ANY }, rets = TUPLE { ANY } },
                }
             },
-            ["maxinteger"] = INTEGER,
+            ["maxinteger"] = a_type { typename = "integer", needs_compat = true },
             ["min"] = a_type {
                typename = "poly",
                types = {
@@ -5085,7 +5089,7 @@ local function init_globals(lax: boolean): {string:Variable}, {string:Type}
                   a_type { typename = "function", args = VARARG { ANY }, rets = TUPLE { ANY } },
                }
             },
-            ["mininteger"] = INTEGER,
+            ["mininteger"] = a_type { typename = "integer", needs_compat = true },
             ["modf"] = a_type { typename = "function", args = TUPLE { NUMBER }, rets = TUPLE { INTEGER, NUMBER } },
             ["pi"] = NUMBER,
             ["pow"] = a_type { typename = "function", args = TUPLE { NUMBER, NUMBER }, rets = TUPLE { NUMBER } },
@@ -8532,30 +8536,31 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result
       ["table_literal"] = {
          before = function(node: Node)
             if node.expected then
-               if node.expected.typename == "tupletable" then
+               local decltype = resolve_tuple_and_nominal(node.expected)
+               if decltype.typename == "tupletable" then
                   for _, child in ipairs(node) do
                      local n = child.key.constnum
                      if n and is_positive_int(n) then
-                        child.value.expected = node.expected.types[n as integer]
+                        child.value.expected = decltype.types[n as integer]
                      end
                   end
-               elseif is_array_type(node.expected) then
+               elseif is_array_type(decltype) then
                   for _, child in ipairs(node) do
                      if child.key.constnum then
-                        child.value.expected = node.expected.elements
+                        child.value.expected = decltype.elements
                      end
                   end
-               elseif node.expected.typename == "map" then
+               elseif decltype.typename == "map" then
                   for _, child in ipairs(node) do
-                     child.key.expected = node.expected.keys
-                     child.value.expected = node.expected.values
+                     child.key.expected = decltype.keys
+                     child.value.expected = decltype.values
                   end
                end
 
-               if is_record_type(node.expected) then
+               if is_record_type(decltype) then
                   for _, child in ipairs(node) do
                      if child.key.conststr then
-                        child.value.expected = node.expected.fields[child.key.conststr]
+                        child.value.expected = decltype.fields[child.key.conststr]
                      end
                   end
                end
@@ -9171,7 +9176,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result
             end,
          },
          ["function"] = {
-            before = function(_typ: Type, _children: {Type})
+            before = function(_typ: Type, _children?: {Type})
                begin_scope()
             end,
             after = function(typ: Type, _children: {Type}): Type
@@ -9180,7 +9185,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result
             end,
          },
          ["record"] = {
-            before = function(typ: Type, _children: {Type})
+            before = function(typ: Type, _children?: {Type})
                begin_scope()
                for name, typ2 in fields_of(typ) do
                   if typ2.typename == "typetype" then
