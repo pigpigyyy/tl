@@ -6350,6 +6350,9 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result
          if #t1.rets ~= #t2.rets then
             return false, terr(t1, "different number of return values: got " .. #t1.args .. ", expected " .. #t2.args)
          end
+         if t1.is_method ~= t2.is_method then
+            return false, terr(t1, "method and non-method are not the same type")
+         end
          local all_errs = {}
          for i = 1, #t1.args do
             arg_check(same_type, t1.args[i], t2.args[i], t1 as Node, i, all_errs)
@@ -6796,16 +6799,19 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result
          else
             local t1nargs = #t1.args
             local t2nargs = #t2.args
-            for i = (t1.is_method and 2 or 1), t1nargs do
+            local f1 = t1.is_method and 2 or 1
+            local f2 = t2.is_method and 2 or 1
+            for i = f1, t1nargs do
                local t1a = t1.args[i]
-               local t2a = t2.args[i] or (t2.args.is_va and t2.args[#t2.args])
+               local t2a = t2.args[f2] or (t2.args.is_va and t2.args[#t2.args])
                local t1aopt = t1a and (t1a.opt or (t1.args.is_va and i >= t1nargs))
                local t2aopt = t2a and (t2a.opt or (t2.args.is_va and i >= t2nargs))
                if not t1aopt and t2aopt then
                   table.insert(all_errs, error_in_type(t1, "argument " .. i .." is non-optional, but is optional in expected type %s", t2))
-					else
+               else
                   arg_check(is_a, t1a, t2a or ANY, nil, i, all_errs)
                end
+               f2 = f2 + 1
             end
          end
          local diff_by_va = #t2.rets - #t1.rets == 1 and t2.rets.is_va
