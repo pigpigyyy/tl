@@ -5461,6 +5461,9 @@ tl.type_check = function(ast, opts)
    end
 
    local function find_type(names, accept_typearg)
+      if not names then
+         return nil
+      end
       local typ = find_var_type(names[1])
       if not typ then
          return nil

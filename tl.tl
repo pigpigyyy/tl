@@ -5461,6 +5461,9 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
    end
 
    local function find_type(names: {string}, accept_typearg?: boolean): Type
+      if not names then
+         return nil
+      end
       local typ = find_var_type(names[1])
       if not typ then
          return nil
