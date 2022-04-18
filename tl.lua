@@ -5956,7 +5956,7 @@ tl.type_check = function(ast, opts)
 
    local function match_fields_to_record(t1, t2, cmp)
       if t1.is_userdata ~= t2.is_userdata then
-         return false, { error_in_type(t1, "userdata record doesn't match: ", t2) }
+         return false, { error_in_type(t1, "userdata record doesn't match: %s", t2) }
       end
       local ok, fielderrs = match_record_fields(t1, function(k) return t2.fields[k] end, cmp)
       if not ok then

@@ -357,6 +357,7 @@ describe("record method", function()
    ]], {
       { msg = "unknown variable: bla" }
    }))
+
    it("doesn't hang when comparing method and non-method (regression test for #501)", util.check_type_error([[
       local record Point
       end
