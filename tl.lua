@@ -388,7 +388,7 @@ do
    end
 
    local lex_any_char_kinds = {}
-   local single_char_kinds = { "[", "]", "(", ")", "{", "}", ",", "#", "`", ";", "?" }
+   local single_char_kinds = { "[", "]", "(", ")", "{", "}", ",", "#", ";", "?" }
    for _, c in ipairs(single_char_kinds) do
       lex_any_char_kinds[c] = c
    end
@@ -1521,28 +1521,12 @@ local function parse_trying_list(ps, i, list, parse_item)
 end
 
 local function parse_typearg_type(ps, i)
-   local backtick = false
-   if ps.tokens[i].tk == "`" then
-      i = verify_tk(ps, i, "`")
-      backtick = true
-   end
    i = verify_kind(ps, i, "identifier")
    return i, a_type({
       y = ps.tokens[i - 2].y,
       x = ps.tokens[i - 2].x,
       typename = "typearg",
-      typearg = (backtick and "`" or "") .. ps.tokens[i - 1].tk,
-   })
-end
-
-local function parse_typevar_type(ps, i)
-   i = verify_tk(ps, i, "`")
-   i = verify_kind(ps, i, "identifier")
-   return i, a_type({
-      y = ps.tokens[i - 2].y,
-      x = ps.tokens[i - 2].x,
-      typename = "typevar",
-      typevar = "`" .. ps.tokens[i - 1].tk,
+      typearg = ps.tokens[i - 1].tk,
    })
 end
 
@@ -1682,8 +1666,6 @@ local function parse_base_type(ps, i)
       typ.keys = a_type({ typename = "any" })
       typ.values = a_type({ typename = "any" })
       return i + 1, typ
-   elseif tk == "`" then
-      return parse_typevar_type(ps, i)
    end
    return fail(ps, i, "expected a type")
 end
@@ -4105,10 +4087,10 @@ local NONE = a_type({ typename = "none" })
 local INVALID = a_type({ typename = "invalid" })
 local UNKNOWN = a_type({ typename = "unknown" })
 
-local ALPHA = a_type({ typename = "typevar", typevar = "@a" })
-local BETA = a_type({ typename = "typevar", typevar = "@b" })
-local ARG_ALPHA = a_type({ typename = "typearg", typearg = "@a" })
-local ARG_BETA = a_type({ typename = "typearg", typearg = "@b" })
+local ALPHA = a_type({ typename = "typevar", typevar = "`a" })
+local BETA = a_type({ typename = "typevar", typevar = "`b" })
+local ARG_ALPHA = a_type({ typename = "typearg", typearg = "`a" })
+local ARG_BETA = a_type({ typename = "typearg", typearg = "`b" })
 local ARRAY_OF_ALPHA = a_type({ typename = "array", elements = ALPHA })
 local MAP_OF_ALPHA_TO_BETA = a_type({ typename = "map", keys = ALPHA, values = BETA })
 local NOMINAL_METATABLE_OF_ALPHA = a_type({ typename = "nominal", names = { "metatable" }, typevals = { ALPHA } })
@@ -4510,9 +4492,9 @@ local function show_type_base(t, short, seen)
          (t.tk and " " .. t.tk or "")
       end
    elseif t.typename == "typevar" then
-      return t.typevar
+      return (t.typevar:gsub("@.*", ""))
    elseif t.typename == "typearg" then
-      return t.typearg
+      return (t.typearg:gsub("@.*", ""))
    elseif is_unknown(t) then
       return "<unknown type>"
    elseif t.typename == "invalid" then
@@ -4765,7 +4747,7 @@ local function init_globals(lax)
 
    local save_typeid = last_typeid
    if is_first_init then
-      globals_typeid = last_typeid
+      globals_typeid = new_typeid()
    else
       last_typeid = globals_typeid
    end
@@ -5414,17 +5396,42 @@ tl.type_check = function(ast, opts)
             globals[k] = v.t
          end
       end
-      return a_type({
+      return {
+         typeid = globals_typeid,
          typename = "record",
          field_order = sorted_keys(globals),
          fields = globals,
-      }), nil
+      }, nil
+   end
+
+   local TypevarCallback = {}
+   local resolve_typevars
+
+   local fresh_typevar_ctr = 1
+
+   local function fresh_typevar(t)
+      local rt = a_type({
+         opt = t.opt,
+         typename = "typevar",
+         typevar = (t.typevar:gsub("@.*", "")) .. "@" .. fresh_typevar_ctr,
+      })
+      return t, rt
    end
 
    local function find_var_type(name, raw)
       local var = find_var(name, raw)
       if var then
-         return var.t, var.attribute
+         local t = var.t
+         if t.typeargs then
+            fresh_typevar_ctr = fresh_typevar_ctr + 1
+            for _, ta in ipairs(t.typeargs) do
+               ta.typearg = (ta.typearg:gsub("@.*", "")) .. "@" .. fresh_typevar_ctr
+            end
+            local ok
+            ok, t = resolve_typevars(t, fresh_typevar)
+            assert(ok, "Internal Compiler Error: error creating fresh type variables")
+         end
+         return t, var.attribute
       end
    end
 
@@ -5571,9 +5578,27 @@ tl.type_check = function(ast, opts)
       ["unknown"] = true,
    }
 
-   local function resolve_typevars(typ)
+   local function default_resolve_typevars_callback(t)
+      local orig_t = t
+      t = find_var_type(t.typevar)
+      local rt
+      if not t then
+         rt = orig_t
+      elseif t.typename == "string" then
+
+         rt = STRING
+      elseif no_nested_types[t.typename] or
+         (t.typename == "nominal" and not t.typevals) then
+         rt = t
+      end
+      return t, rt
+   end
+
+   resolve_typevars = function(typ, fn)
       local errs
       local seen = {}
+
+      fn = fn or default_resolve_typevars_callback
 
       local function resolve(t)
 
@@ -5589,17 +5614,8 @@ tl.type_check = function(ast, opts)
 
          local orig_t = t
          if t.typename == "typevar" then
-            t = find_var_type(t.typevar)
             local rt
-            if not t then
-               rt = orig_t
-            elseif t.typename == "string" then
-
-               rt = STRING
-            elseif no_nested_types[t.typename] or
-               (t.typename == "nominal" and not t.typevals) then
-               rt = t
-            end
+            t, rt = fn(t)
             if rt then
                seen[orig_t] = rt
                return rt
@@ -8875,7 +8891,11 @@ node.exps[3] and node.exps[3].type, }
                   node.name.type = fn_type
                else
                   local name = tl.pretty_print_ast(node.fn_owner, opts.gen_target, { preserve_indent = true, preserve_newlines = false })
-                  node_error(node, "cannot add undeclared function '" .. node.name.tk .. "' outside of the scope where '" .. name .. "' was originally declared")
+                  if rtype.fields[node.name.tk] then
+                     node_error(node, "type signature of '" .. node.name.tk .. "' does not match its declaration in " .. show_type(node.fn_owner.type))
+                  else
+                     node_error(node, "cannot add undeclared function '" .. node.name.tk .. "' outside of the scope where '" .. name .. "' was originally declared")
+                  end
                end
             else
                if not (lax and rtype.typename == "unknown") then
