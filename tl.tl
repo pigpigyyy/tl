@@ -131,6 +131,8 @@ local record tl
 
    package_loader_env: Env
    load_envs: { {any:any} : Env }
+
+   canonicalize_path: function(string, string): string
 end
 
 tl.version = function(): string
@@ -209,6 +211,68 @@ local type TypeInfo = tl.TypeInfo
 local type TypeReport = tl.TypeReport
 local type TypeReportEnv = tl.TypeReportEnv
 local type Symbol = tl.Symbol
+
+--------------------------------------------------------------------------------
+-- Compiler debugging
+--------------------------------------------------------------------------------
+
+if os.getenv("TL_DEBUG") then
+   local max <const> = assert(tonumber(os.getenv("TL_DEBUG")), "TL_DEBUG was defined, but not a number")
+   local count = 0
+   debug.sethook(function(event: debug.HookEvent)
+      if event == "call" or event == "tail call" or event == "return" then
+         local info <const> = debug.getinfo(2)
+         io.stderr:write(info.name or "<anon>", info.currentline > 0 and "@" .. info.currentline or "", " :: ", event, "\n")
+         io.stderr:flush()
+      else
+         count = count + 100
+         if count > max then
+            error("Too many instructions")
+         end
+      end
+   end, "cr", 100)
+end
+
+--------------------------------------------------------------------------------
+-- File system utility
+--------------------------------------------------------------------------------
+
+function tl.canonicalize_path(filename: string, sep: string): string
+   if not filename then
+      return nil
+   end
+
+   sep = sep or package.config:sub(1, 1)
+   if sep ~= "/" then
+      filename = filename:gsub(sep, "/")
+   end
+
+   filename = filename:gsub("/*$", ""):gsub("/+", "/")
+   local pieces: {string} = {}
+   local drive = ""
+   if sep == "\\" and filename:match("^.:") then
+      drive, filename = filename:match("^(.:)(.*)$")
+   end
+   for piece in filename:gmatch("[^/]*") do
+      if piece == ".." then
+         local prev = pieces[#pieces]
+         if not prev or prev == ".." then
+            table.insert(pieces, "..")
+         elseif prev ~= "" then
+            table.remove(pieces)
+         end
+      elseif piece ~= "." then
+         table.insert(pieces, piece)
+      end
+   end
+   filename = drive .. table.concat(pieces, "/")
+
+   if sep ~= "/" then
+      filename = filename:gsub("/", sep)
+   end
+
+   return filename
+end
 
 --------------------------------------------------------------------------------
 -- Lexer
@@ -2973,6 +3037,8 @@ local function clear_redundant_errors(errors: {Error})
 end
 
 function tl.parse_program(tokens: {Token}, errs: {Error}, filename: string): integer, Node, {string}
+   filename = tl.canonicalize_path(filename, nil)
+
    errs = errs or {}
    local ps: ParseState = {
       tokens = tokens,
@@ -4539,19 +4605,18 @@ function tl.search_module(module_name: string, search_dtl: boolean): string, FIL
    local path = os.getenv("TL_PATH") or package.path
    if search_dtl then
       found, fd, tried = search_for(module_name, ".d.tl", path, tried)
-      if found then
-         return found, fd
-      end
    end
-   found, fd, tried = search_for(module_name, ".tl", path, tried)
+   if not found then
+      found, fd, tried = search_for(module_name, ".tl", path, tried)
+   end
+   if not found then
+      found, fd, tried = search_for(module_name, ".lua", path, tried)
+   end
    if found then
-      return found, fd
+      return tl.canonicalize_path(found, nil), fd
+   else
+      return nil, nil, tried
    end
-   found, fd, tried = search_for(module_name, ".lua", path, tried)
-   if found then
-      return found, fd
-   end
-   return nil, nil, tried
 end
 
 local record Variable
@@ -7038,7 +7103,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
       return func, is_method
    end
 
-   local type_check_function_call: function(Node, Type, {Type}, boolean, ?integer): Type
+   local type_check_function_call: function(Node, Type, {Type}, boolean, ?integer): Type, Type
    do
       local function mark_invalid_typeargs(f: Type)
          if f.typeargs then
@@ -7136,7 +7201,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
          return resolve_typevars_at(f.rets, node)
       end
 
-      local function check_call(node: Node, func: Type, args: {Type}, is_method: boolean, argdelta: integer): Type
+      local function check_call(node: Node, func: Type, args: {Type}, is_method: boolean, argdelta: integer): Type, Type
          assert(type(func) == "table")
          assert(type(args) == "table")
 
@@ -7182,7 +7247,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
                      local matched, errs = try_match_func_args(node, f, args, argdelta)
                      if matched then
                         -- success!
-                        return matched
+                        return matched, f
                      end
                      first_errs = first_errs or errs
 
@@ -7199,11 +7264,11 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
          return fail_call(node, func, given, first_errs)
       end
 
-      type_check_function_call = function(node: Node, func: Type, args: {Type}, is_method: boolean, argdelta?: integer): Type
+      type_check_function_call = function(node: Node, func: Type, args: {Type}, is_method: boolean, argdelta?: integer): Type, Type
          begin_scope()
-         local ret = check_call(node, func, args, is_method, argdelta)
+         local ret, f = check_call(node, func, args, is_method, argdelta)
          end_scope()
-         return ret
+         return ret, f
       end
    end
 
@@ -7240,7 +7305,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
             elseif tbl.meta_fields and tbl.meta_fields["__index"] then
                local ft = tbl.meta_fields["__index"]
                if ft.typename == "function" then
-                  return type_check_function_call(node, ft, { tbl, key.type or simple_types[key.kind] }, false, 0)
+                  return (type_check_function_call(node, ft, { tbl, key.type or simple_types[key.kind] }, false, 0))
                end
             end
          end
@@ -7511,7 +7576,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
          elseif a.meta_fields and a.meta_fields["__index"] then
             local ft = a.meta_fields["__index"]
             if ft.typename == "function" then
-               return type_check_function_call(node, ft, { a, b }, false, 0)
+               return (type_check_function_call(node, ft, { a, b }, false, 0))
             end
          elseif is_a(b, STRING) then
             return node_error(idxnode, "cannot index object of type %s with a string, consider using an enum", orig_a)
@@ -7999,7 +8064,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
 
       ["assert"] = function(node: Node, a: Type, b: {Type}, argdelta: integer): Type
          node.known = FACT_TRUTHY
-         return type_check_function_call(node, a, b, false, argdelta)
+         return (type_check_function_call(node, a, b, false, argdelta))
       end,
    }
 
@@ -8009,13 +8074,13 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
          if special then
             return special(node, a, b, argdelta)
          else
-            return type_check_function_call(node, a, b, false, argdelta)
+            return (type_check_function_call(node, a, b, false, argdelta))
          end
       elseif node.e1.op and node.e1.op.op == ":" then
          table.insert(b, 1, node.e1.e1.type)
-         return type_check_function_call(node, a, b, true)
+         return (type_check_function_call(node, a, b, true))
       else
-         return type_check_function_call(node, a, b, false, argdelta)
+         return (type_check_function_call(node, a, b, false, argdelta))
       end
    end
 
@@ -8561,6 +8626,13 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
             local args = {node.exps[2] and node.exps[2].type,
                           node.exps[3] and node.exps[3].type}
             local exp1type = resolve_for_call(exp1, exp1.type, args)
+
+            if exp1type.typename == "poly" then
+               local _, matched = type_check_function_call(node, exp1type, args, false, 0)
+               if matched then
+                  exp1type = matched
+               end
+            end
 
             if exp1type.typename == "function" then
                -- check common errors:
@@ -9132,7 +9204,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
                else
                   metamethod = a.meta_fields and a.meta_fields[unop_to_metamethod[node.op.op] or ""]
                   if metamethod then
-                     node.type = resolve_tuple_and_nominal(type_check_function_call(node, metamethod, {a}, false, 0))
+                     node.type = resolve_tuple_and_nominal((type_check_function_call(node, metamethod, {a}, false, 0)))
                   elseif lax and is_unknown(a) then
                      node.type = UNKNOWN
                   else
@@ -9180,7 +9252,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
                      meta_self = 2
                   end
                   if metamethod then
-                     node.type = resolve_tuple_and_nominal(type_check_function_call(node, metamethod, {a, b}, false, 0))
+                     node.type = resolve_tuple_and_nominal((type_check_function_call(node, metamethod, {a, b}, false, 0)))
                   elseif lax and (is_unknown(a) or is_unknown(b)) then
                      node.type = UNKNOWN
                   else
@@ -9590,7 +9662,7 @@ function tl.get_types(result: Result, trenv: TypeReportEnv): TypeReport, TypeRep
       n = trenv.next_num
 
       local rt = t
-      if rt.typename == "typetype" or rt.typename == "nestedtype" then
+      if is_typetype(rt) then
          rt = rt.def
       elseif rt.typename == "tuple" and #rt == 1 then
          rt = rt[1]
@@ -9613,7 +9685,7 @@ function tl.get_types(result: Result, trenv: TypeReportEnv): TypeReport, TypeRep
       if t.resolved then
          rt = t
       end
-      assert(rt.typename ~= "typetype")
+      assert(not is_typetype(rt))
 
       if is_record_type(rt) then
          -- store record field info
@@ -9790,6 +9862,8 @@ end
 --------------------------------------------------------------------------------
 
 tl.process = function(filename: string, env: Env): Result, string
+   filename = tl.canonicalize_path(filename, nil)
+
    if env and env.loaded and env.loaded[filename] then
       return env.loaded[filename]
    end
@@ -9820,6 +9894,7 @@ tl.process = function(filename: string, env: Env): Result, string
 end
 
 function tl.process_string(input: string, is_lua: boolean, env: Env, filename?: string): Result
+   filename = tl.canonicalize_path(filename, nil)
 
    env = env or tl.init_env(is_lua)
    if env.loaded and env.loaded[filename] then
