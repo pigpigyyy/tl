@@ -48,7 +48,7 @@ precedence, see below.
 
    label ::= ‘::’ Name ‘::’
 
-   funcname ::= Name {‘.’ Name} [‘:’ Name]
++  funcname ::= Name {‘.’ Name} ‘:’ Name | Name {‘.’ Name} ‘.’ Name
 
    varlist ::= var {‘,’ var}
 
@@ -150,3 +150,4 @@ Operator precedence in Teal follows the table below, from lower to higher priori
 As usual, you can use parentheses to change the precedences of an expression.
 The concatenation (`..`) and exponentiation (`^`) operators are right
 associative. All other binary operators are left associative.
+

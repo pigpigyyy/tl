@@ -349,7 +349,7 @@ describe("generic function", function()
          recurse_node(ast, visit_node, visit_type)
       end
    ]], {
-      { x = 40, msg = "argument 3: type parameter <T>: got number, expected string" }
+      { x = 40, msg = "argument 3: in map value: type parameter <T>: got number, expected string" }
    }))
 
    it("inference trickles down to function arguments, pass", util.check [[
@@ -381,7 +381,7 @@ describe("generic function", function()
 
    it("does not leak an unresolved generic type", function()
       local _, ast = util.check([[
-         function mypairs<a, b>(map: {a:b}): (a, b)
+         local function mypairs<a, b>(map: {a:b}): (a, b)
          end
 
          local _, resolved   = mypairs({["hello"] = true})
@@ -397,9 +397,9 @@ describe("generic function", function()
    end)
 
    it("does not produce a recursive type", util.lax_check([[
-      function mypairs<a, b>(map: {a:b}): (a, b)
+      local function mypairs<a, b>(map: {a:b}): (a, b)
       end
-      function myipairs<a>(array: {a}): (a)
+      local function myipairs<a>(array: {a}): (a)
       end
 
       local _, xs = mypairs(xss)

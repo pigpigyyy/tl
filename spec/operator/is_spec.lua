@@ -25,7 +25,7 @@ describe("flow analysis with is", function()
 
          local r = x is string and (x:sub(1,1) == "a") or (x:upper() == "k")
       ]], {
-         { x = 62, msg = "cannot index something that is not a record: number | string"}
+         { x = 62, msg = "cannot index key 'upper' in union 'x' of type number | string"}
       }))
 
       it("does not narrow type on expressions with conditional 'is' and or", util.check [[
@@ -63,7 +63,7 @@ describe("flow analysis with is", function()
 
          local s = not x is string and ohoh(x + 1) or x:upper() -- x <= 10 may fall into x:upper()
       ]], {
-         { y = 11, x = 57, msg = "cannot index something that is not a record: number | string"}
+         { y = 11, x = 57, msg = [[cannot index key 'upper' in union 'x' of type number | string]]}
       }))
 
       it("propagates with 'and' and 'assert' because result is known to be truthy", util.check [[
@@ -141,7 +141,7 @@ describe("flow analysis with is", function()
          end
          local type UnionAorB = A | B
 
-         function head(n: UnionAorB): UnionAorB
+         local function head(n: UnionAorB): UnionAorB
            if n is B then
              return n.h
            else
@@ -181,7 +181,7 @@ describe("flow analysis with is", function()
             print(v:upper()) -- v is string | {boolean}
          end
       ]], {
-         { msg = "cannot index something that is not a record: string | {boolean}" }
+         { msg = [[cannot index key 'upper' in union 'v' of type string | {boolean} (inferred at foo.tl:4:10)]] }
       }))
 
       it("builds union types with is and or", util.check_type_error([[
@@ -229,7 +229,7 @@ describe("flow analysis with is", function()
             print(t + 1)
          end
       ]], {
-         { y = 3, msg = 'cannot index something that is not a record: number (inferred at foo.tl:2:15)' },
+         { y = 3, msg = [[cannot index key 'upper' in number 't' of type number (inferred at foo.tl:2:15)]] },
          { y = 5, msg = [[cannot use operator '+' for types string (inferred at foo.tl:4:10) and integer]] },
       }))
 
@@ -352,7 +352,7 @@ describe("flow analysis with is", function()
             local isb: boolean = b
          end
       ]], {
-         { y = 9, msg = "cannot index something that is not a record" },
+         { y = 9, msg = "cannot index key 'upper' in union 'a' of type string | number" },
          { y = 10, msg = "got boolean | thread, expected boolean" },
       }))
 
@@ -393,7 +393,7 @@ describe("flow analysis with is", function()
       }))
 
       it("resolves is on the test", util.check [[
-         function process(ts: {number | string})
+         local function process(ts: {number | string})
             local t: number | string
             t = ts[1]
             local i = 1
@@ -419,7 +419,7 @@ describe("flow analysis with is", function()
       }))
 
       it("can resolve on else block even if it can't on if block (#210)", util.check [[
-         function foo(v: any)
+         local function foo(v: any)
             if not v is string then
                print("foo")
             else
@@ -511,12 +511,12 @@ describe("flow analysis with is", function()
             local n = x is number and x < 123 or tonumber(x:sub(1,2))
          ]], {
             { msg = "cannot use operator 'or' for types boolean and number" },
-            { y = 3, x = 61, msg = "cannot index something that is not a record: number | string" },
+            { y = 3, x = 61, msg = "cannot index key 'sub' in union 'x' of type number | string" },
          }))
       end)
 
       it("generates type checks for primitive types", util.gen([[
-         function process(ts: {number | string | boolean})
+         local function process(ts: {number | string | boolean})
             local t: number | string | boolean
             t = ts[1]
             if t is number then
@@ -526,7 +526,7 @@ describe("flow analysis with is", function()
             end
          end
       ]], [[
-         function process(ts)
+         local function process(ts)
             local t
             t = ts[1]
             if type(t) == "number" do
@@ -541,7 +541,7 @@ describe("flow analysis with is", function()
          local type U = record
             userdata
          end
-         function process(ts: {number | {string} | boolean | U})
+         global function process(ts: {number | {string} | boolean | U})
             local t: number | {string} | boolean | U
             t = ts[1]
             if t is number then
@@ -553,7 +553,7 @@ describe("flow analysis with is", function()
             end
          end
       ]], [[
-         local U = {}
+
 
 
          function process(ts)

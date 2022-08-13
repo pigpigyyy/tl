@@ -293,12 +293,12 @@ describe("record method", function()
    end)
 
    it("does not fail when declaring methods on untyped self (regression test for #427)", util.check_type_error([[
-      function foo()
-        local self = { }
-        function self:bar(): string
-          return "bar"
-        end
-        return self
+      local function foo()
+         local self = { }
+         function self:bar(): string
+            return "bar"
+         end
+         return self
       end
    ]], {
       { msg = "in return value: excess return values" }
@@ -310,12 +310,32 @@ describe("record method", function()
          return "bar"
       end
    ]], {
-      { msg = "cannot index something that is not a record" }
+      { msg = "cannot index key 'bla' in type number" }
+   }))
+
+   it("catches a bad number of arguments in method", util.check_type_error([[
+      local record T<A, B>
+        method: function(function(A)): T<A, B>
+      end
+
+      local t = { }
+
+      function t.new<A, B>(): T<A, B>
+        local self = { }
+        function self:method(callback: function(A)): T<A, B>
+          return self
+        end
+        return self
+      end
+
+      return t
+   ]], {
+      { msg = "in return value: record (method: function(self, function(A)): T<A, B>) is not a record<A, B> (method: function(function(A)): T<A, B>): record field doesn't match: method: argument 1 expects record or nominal" },
    }))
 
    it("does not fail when declaring methods on untyped self (regression test for #427)", util.check [[
       local record T<A, B>
-        method: function(function(A)): T<A, B>
+        method: function(T<A, B>, function(A)): T<A, B>
       end
 
       local t = { }
@@ -390,11 +410,11 @@ describe("record method", function()
 
       local b : Rec.Plugin = {}
 
-      -- fails
+      -- works
       function b:start(config: any)
       end
 
-      -- fails
+      -- works
       function b:start(config: any, n: number)
       end
 
@@ -410,8 +430,6 @@ describe("record method", function()
       function b.stop(self: Rec.Plugin)
       end
    ]], {
-      { y = 11, msg = "type signature of 'start' does not match its declaration in Rec.Plugin" },
-      { y = 15, msg = "type signature of 'start' does not match its declaration in Rec.Plugin" }
    }))
 
 end)
