@@ -1498,15 +1498,15 @@ local function parse_table_item(ps: ParseState, i: integer, n?: integer): intege
    return i, node, n + 1
 end
 
-local type ParseItem = function<T,S>(ParseState, integer, ?S): integer, T, S
+local type ParseItem = function<T>(ParseState, integer, ?integer): integer, T, integer
 
 local enum SeparatorMode
    "sep"
    "term"
 end
 
-local function parse_list<T,S>(ps: ParseState, i: integer, list: {T}, close: {string:boolean}, sep: SeparatorMode, parse_item: ParseItem<T,S>): integer, {T}
-   local n: S
+local function parse_list<T>(ps: ParseState, i: integer, list: {T}, close: {string:boolean}, sep: SeparatorMode, parse_item: ParseItem<T>): integer, {T}
+   local n = 1
    while ps.tokens[i].kind ~= "$EOF$" do
       if close[ps.tokens[i].tk] then
          end_at(list as Node, ps.tokens[i])
@@ -1548,7 +1548,7 @@ local function parse_list<T,S>(ps: ParseState, i: integer, list: {T}, close: {st
    return i, list
 end
 
-local function parse_bracket_list<T,S>(ps: ParseState, i: integer, list: {T}, open: string, close: string, sep: SeparatorMode, parse_item: ParseItem<T,S>): integer, {T}
+local function parse_bracket_list<T,S>(ps: ParseState, i: integer, list: {T}, open: string, close: string, sep: SeparatorMode, parse_item: ParseItem<T>): integer, {T}
    i = verify_tk(ps, i, open)
    i = parse_list(ps, i, list, { [close] = true }, sep, parse_item)
    i = verify_tk(ps, i, close)
@@ -1560,7 +1560,7 @@ local function parse_table_literal(ps: ParseState, i: integer): integer, Node
    return parse_bracket_list(ps, i, node, "{", "}", "term", parse_table_item)
 end
 
-local function parse_trying_list<T,S>(ps: ParseState, i: integer, list: {T}, parse_item: ParseItem<T,S>): integer, {T}
+local function parse_trying_list<T,S>(ps: ParseState, i: integer, list: {T}, parse_item: ParseItem<T>): integer, {T}
    local try_ps: ParseState = {
       filename = ps.filename,
       tokens = ps.tokens,
@@ -1588,7 +1588,25 @@ local function parse_trying_list<T,S>(ps: ParseState, i: integer, list: {T}, par
    return i, list
 end
 
-local function parse_typearg_type(ps: ParseState, i: integer): integer, Type, nil
+local function parse_anglebracket_list<T>(ps: ParseState, i: integer, parse_item: ParseItem<Type>): integer, {Type}
+   if ps.tokens[i+1].tk == ">" then
+      return fail(ps, i+1, "type argument list cannot be empty")
+   end
+   local typ = new_type(ps, i, "tuple")
+   i = verify_tk(ps, i, "<")
+   i = parse_list(ps, i, typ, { [">"] = true, [">>"] = true, }, "sep", parse_item)
+   if ps.tokens[i].tk == ">" then
+      i = i + 1
+   elseif ps.tokens[i].tk == ">>" then
+      -- tokenizer hack: consume one bracket from '>>', don't increment i
+      ps.tokens[i].tk = ">"
+   else
+      return fail(ps, i, "syntax error, expected '>'")
+   end
+   return i, typ
+end
+
+local function parse_typearg(ps: ParseState, i: integer): integer, Type, integer
    i = verify_kind(ps, i, "identifier")
    return i, a_type {
       y = ps.tokens[i - 2].y,
@@ -1596,22 +1614,6 @@ local function parse_typearg_type(ps: ParseState, i: integer): integer, Type, ni
       typename = "typearg",
       typearg = ps.tokens[i - 1].tk,
    }
-end
-
-local function parse_typearg_list(ps: ParseState, i: integer): integer, Type
-   if ps.tokens[i+1].tk == ">" then
-      return fail(ps, i+1, "type argument list cannot be empty")
-   end
-   local typ = new_type(ps, i, "tuple")
-   return parse_bracket_list(ps, i, typ, "<", ">", "sep", parse_typearg_type)
-end
-
-local function parse_typeval_list(ps: ParseState, i: integer): integer, Type
-   if ps.tokens[i+1].tk == ">" then
-      return fail(ps, i+1, "type argument list cannot be empty")
-   end
-   local typ = new_type(ps, i, "tuple")
-   return parse_bracket_list(ps, i, typ, "<", ">", "sep", parse_type)
 end
 
 local function parse_return_types(ps: ParseState, i: integer): integer, Type
@@ -1622,7 +1624,7 @@ local function parse_function_type(ps: ParseState, i: integer): integer, Type
    local typ = new_type(ps, i, "function")
    i = i + 1
    if ps.tokens[i].tk == "<" then
-      i, typ.typeargs = parse_typearg_list(ps, i)
+      i, typ.typeargs = parse_anglebracket_list(ps, i, parse_typearg)
    end
    if ps.tokens[i].tk == "(" then
       i, typ.args = parse_argument_type_list(ps, i)
@@ -1682,7 +1684,7 @@ local function parse_base_type(ps: ParseState, i: integer): integer, Type
       end
 
       if ps.tokens[i].tk == "<" then
-         i, typ.typevals = parse_typeval_list(ps, i)
+         i, typ.typevals = parse_anglebracket_list(ps, i, parse_type)
       end
       return i, typ
    elseif tk == "{" then
@@ -1813,7 +1815,7 @@ end
 local function parse_function_args_rets_body(ps: ParseState, i: integer, node: Node): integer, Node
    local istart = i - 1
    if ps.tokens[i].tk == "<" then
-      i, node.typeargs = parse_typearg_list(ps, i)
+      i, node.typeargs = parse_anglebracket_list(ps, i, parse_typearg)
    end
    i, node.args = parse_argument_list(ps, i)
    i, node.rets = parse_return_types(ps, i)
@@ -2634,7 +2636,7 @@ parse_record_body = function(ps: ParseState, i: integer, def: Type, node: Node):
    def.fields = {}
    def.field_order = {}
    if ps.tokens[i].tk == "<" then
-      i, def.typeargs = parse_typearg_list(ps, i)
+      i, def.typeargs = parse_anglebracket_list(ps, i, parse_typearg)
    end
    while not (ps.tokens[i].kind == "$EOF$" or ps.tokens[i].tk == "end") do
       if ps.tokens[i].tk == "userdata" and ps.tokens[i+1].tk ~= ":" then
