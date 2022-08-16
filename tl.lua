@@ -1,4 +1,4 @@
-
+local _tl_compat; if (tonumber((_VERSION or ''):match('[%d.]*$')) or 0) < 5.3 then local p, m = pcall(require, 'compat53.module'); if p then _tl_compat = m end end; local assert = _tl_compat and _tl_compat.assert or assert; local debug = _tl_compat and _tl_compat.debug or debug; local io = _tl_compat and _tl_compat.io or io; local ipairs = _tl_compat and _tl_compat.ipairs or ipairs; local load = _tl_compat and _tl_compat.load or load; local math = _tl_compat and _tl_compat.math or math; local os = _tl_compat and _tl_compat.os or os; local package = _tl_compat and _tl_compat.package or package; local pairs = _tl_compat and _tl_compat.pairs or pairs; local string = _tl_compat and _tl_compat.string or string; local table = _tl_compat and _tl_compat.table or table; local _tl_table_unpack = unpack or table.unpack
 local VERSION = "0.14.0"
 
 local tl = {TypeCheckOptions = {}, Env = {}, Symbol = {}, Result = {}, Error = {}, TypeInfo = {}, TypeReport = {}, TypeReportEnv = {}, }
@@ -217,11 +217,11 @@ tl.typecodes = {
 
 
 if os.getenv("TL_DEBUG") then
-   local max <const> = assert(tonumber(os.getenv("TL_DEBUG")), "TL_DEBUG was defined, but not a number")
+   local max = assert(tonumber(os.getenv("TL_DEBUG")), "TL_DEBUG was defined, but not a number")
    local count = 0
    debug.sethook(function(event)
       if event == "call" or event == "tail call" or event == "return" then
-         local info <const> = debug.getinfo(2)
+         local info = debug.getinfo(2)
          io.stderr:write(info.name or "<anon>", info.currentline > 0 and "@" .. info.currentline or "", " :: ", event, "\n")
          io.stderr:flush()
       else
@@ -930,13 +930,13 @@ do
 end
 
 local function binary_search(list, item, cmp)
-   local len <const> = #list
+   local len = #list
    local mid
    local s, e = 1, len
    while s <= e do
       mid = math.floor((s + e) / 2)
-      local val <const> = list[mid]
-      local res <const> = cmp(val, item)
+      local val = list[mid]
+      local res = cmp(val, item)
       if res then
          if mid == len then
             return mid, val
@@ -953,7 +953,7 @@ local function binary_search(list, item, cmp)
 end
 
 function tl.get_token_at(tks, y, x)
-   local _, found <const> = binary_search(
+   local _, found = binary_search(
    tks, nil,
    function(tk)
       return tk.y < y or
@@ -1201,7 +1201,7 @@ local Fact = {}
 
 
 
-local is_attribute <const> = {
+local is_attribute = {
    ["const"] = true,
    ["close"] = true,
 }
@@ -4854,7 +4854,7 @@ local function init_globals(lax)
          typevars[i] = a_type({ typename = "typevar", typevar = name })
          typeargs[i] = a_type({ typename = "typearg", typearg = name })
       end
-      local t = f(table.unpack(typevars))
+      local t = f(_tl_table_unpack(typevars))
       t.typename = "function"
       t.typeargs = typeargs
       t.opt = opt
@@ -5600,7 +5600,7 @@ tl.type_check = function(ast, opts)
                showt[i] = show_type(t)
             end
          end
-         msg = msg:format(table.unpack(showt))
+         msg = msg:format(_tl_table_unpack(showt))
       end
 
       return {
@@ -5943,14 +5943,14 @@ tl.type_check = function(ast, opts)
    end
 
    local function check_if_redeclaration(new_name, at)
-      local old <const> = find_var(new_name, "check_only")
+      local old = find_var(new_name, "check_only")
       if old then
          redeclaration_warning(at, old)
       end
    end
 
    local function unused_warning(name, var)
-      local prefix <const> = name:sub(1, 1)
+      local prefix = name:sub(1, 1)
       if var.declared_at and
          not var.is_narrowed and
          prefix ~= "_" and
@@ -5991,8 +5991,8 @@ tl.type_check = function(ast, opts)
       if lax and node and is_unknown(valtype) and (var ~= "self" and var ~= "...") and not is_narrowing then
          add_unknown(node, var)
       end
-      local scope <const> = st[#st]
-      local old_var <const> = scope[var]
+      local scope = st[#st]
+      local old_var = scope[var]
       if not attribute then
          valtype = shallow_copy(valtype)
          valtype.tk = nil
@@ -7189,7 +7189,7 @@ tl.type_check = function(ast, opts)
       return t.meta_fields and t.meta_fields["__close"] ~= nil
    end
 
-   local definitely_not_closable_exprs <const> = {
+   local definitely_not_closable_exprs = {
       ["string"] = true,
       ["number"] = true,
       ["integer"] = true,
