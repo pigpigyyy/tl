@@ -1408,16 +1408,20 @@ end
 
 
 
-local function failskip(ps, i, msg, skip_fn, starti)
+local function skip(ps, i, skip_fn)
    local err_ps = {
       filename = ps.filename,
       tokens = ps.tokens,
       errs = {},
       required_modules = {},
    }
-   local skip_i = skip_fn(err_ps, starti or i)
-   fail(ps, starti or i, msg)
-   return skip_i or (i + 1)
+   return skip_fn(err_ps, i)
+end
+
+local function failskip(ps, i, msg, skip_fn, starti)
+   local skip_i = skip(ps, starti or i, skip_fn)
+   fail(ps, i, msg)
+   return skip_i
 end
 
 local function skip_record(ps, i)
@@ -1543,10 +1547,17 @@ local function parse_list(ps, i, list, close, sep, parse_item)
             table.insert(options, "'" .. k .. "'")
          end
          table.sort(options)
-         table.insert(options, "','")
-         local expected = "syntax error, expected one of: " .. table.concat(options, ", ")
-         fail(ps, i, expected)
          local first = options[1]:sub(2, -2)
+         local msg
+
+         if first == ")" and ps.tokens[i].tk == "=" then
+            msg = "syntax error, cannot perform an assignment here (did you mean '=='?)"
+            i = failskip(ps, i, msg, parse_expression, i + 1)
+         else
+            table.insert(options, "','")
+            msg = "syntax error, expected one of: " .. table.concat(options, ", ")
+            fail(ps, i, msg)
+         end
 
 
 
@@ -2034,6 +2045,13 @@ do
 
             local key
             i = i + 1
+            if ps.tokens[i].kind ~= "identifier" then
+               local skipped = skip(ps, i, parse_type)
+               if skipped > i + 1 then
+                  fail(ps, i, "syntax error, cannot declare a type here (missing 'local' or 'global'?)")
+                  return skipped, failstore(tkop, e1)
+               end
+            end
             i, key = verify_kind(ps, i, "identifier")
             if not key then
                return i, failstore(tkop, e1)
@@ -2041,7 +2059,11 @@ do
 
             if op.op == ":" then
                if not args_starters[ps.tokens[i].kind] then
-                  fail(ps, i, "expected a function call for a method")
+                  if ps.tokens[i].tk == "=" then
+                     fail(ps, i, "syntax error, cannot perform an assignment here (missing 'local' or 'global'?)")
+                  else
+                     fail(ps, i, "expected a function call for a method")
+                  end
                   return i, failstore(tkop, e1)
                end
 
@@ -2187,6 +2209,11 @@ parse_expression_and_tk = function(ps, i, tk)
    if ps.tokens[i].tk == tk then
       i = i + 1
    else
+      local msg = "syntax error, expected '" .. tk .. "'"
+      if ps.tokens[i].tk == "=" then
+         msg = "syntax error, cannot perform an assignment here (did you mean '=='?)"
+      end
+
 
       for n = 0, 19 do
          local t = ps.tokens[i + n]
@@ -2194,11 +2221,11 @@ parse_expression_and_tk = function(ps, i, tk)
             break
          end
          if t.tk == tk then
-            fail(ps, i, "syntax error, expected '" .. tk .. "'")
+            fail(ps, i, msg)
             return i + n + 1, e
          end
       end
-      i = fail(ps, i, "syntax error, expected '" .. tk .. "'")
+      i = fail(ps, i, msg)
    end
    return i, e
 end
@@ -2983,13 +3010,6 @@ local function parse_global(ps, i)
    return parse_call_or_assignment(ps, i)
 end
 
-local function parse_type_statement(ps, i)
-   if ps.tokens[i + 1].kind == "identifier" then
-      return failskip(ps, i, "types need to be declared with 'local type' or 'global type'", skip_type_declaration)
-   end
-   return parse_call_or_assignment(ps, i)
-end
-
 local function parse_record_function(ps, i)
    return parse_function(ps, i, "record")
 end
@@ -3000,7 +3020,6 @@ local parse_statement_fns = {
    ["if"] = parse_if,
    ["for"] = parse_for,
    ["goto"] = parse_goto,
-   ["type"] = parse_type_statement,
    ["local"] = parse_local,
    ["while"] = parse_while,
    ["break"] = parse_break,
@@ -3008,6 +3027,18 @@ local parse_statement_fns = {
    ["repeat"] = parse_repeat,
    ["return"] = parse_return,
    ["function"] = parse_record_function,
+}
+
+local needs_local_or_global = {
+   ["type"] = function(ps, i)
+      return failskip(ps, i, "types need to be declared with 'local type' or 'global type'", skip_type_declaration)
+   end,
+   ["record"] = function(ps, i)
+      return failskip(ps, i, "records need to be declared with 'local record' or 'global record'", skip_record)
+   end,
+   ["enum"] = function(ps, i)
+      return failskip(ps, i, "enums need to be declared with 'local enum' or 'global enum'", skip_enum)
+   end,
 }
 
 parse_statements = function(ps, i, toplevel)
@@ -3024,14 +3055,22 @@ parse_statements = function(ps, i, toplevel)
       if ps.tokens[i].kind == "$EOF$" then
          break
       end
-      if (not toplevel) and stop_statement_list[ps.tokens[i].tk] then
+      local tk = ps.tokens[i].tk
+      if (not toplevel) and stop_statement_list[tk] then
          break
       end
 
+      local fn = parse_statement_fns[tk]
+      if not fn then
+         local skip_fn = needs_local_or_global[tk]
+         if skip_fn and ps.tokens[i + 1].kind == "identifier" then
+            fn = skip_fn
+         else
+            fn = parse_call_or_assignment
+         end
+      end
 
-      local parse_statement_fn = parse_statement_fns[ps.tokens[i].tk] or parse_call_or_assignment
-      i, item = parse_statement_fn(ps, i)
-
+      i, item = fn(ps, i)
 
       if item then
          table.insert(node, item)
@@ -9980,7 +10019,7 @@ function tl.get_types(result, trenv)
    local visit_node = { allow_missing_cbs = true }
    local visit_type = { allow_missing_cbs = true }
 
-   local skip = {
+   local skip_types = {
       ["none"] = true,
       ["tuple"] = true,
       ["table_item"] = true,
@@ -9990,7 +10029,7 @@ function tl.get_types(result, trenv)
    tr.by_pos[filename] = ft
 
    local function store(y, x, typ)
-      if not typ or skip[typ.typename] then
+      if not typ or skip_types[typ.typename] then
          return
       end
 
