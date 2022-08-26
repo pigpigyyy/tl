@@ -2244,11 +2244,11 @@ local function parse_variable_name(ps, i)
          if not is_attribute[annotation.tk] then
             fail(ps, i, "unknown variable annotation: " .. annotation.tk)
          end
+         node.attribute = annotation.tk
       else
          fail(ps, i, "expected a variable annotation")
       end
       i = verify_tk(ps, i, ">")
-      node.attribute = annotation.tk
    end
    return i, node
 end
@@ -4072,6 +4072,9 @@ function tl.pretty_print_ast(ast, gen_target, mode)
                   table.insert(out, "math.type(")
                   add_child(out, children[1], "", indent)
                   table.insert(out, ") == \"integer\"")
+               elseif node.e2.casttype.typename == "nil" then
+                  add_child(out, children[1], "", indent)
+                  table.insert(out, " == nil")
                else
                   table.insert(out, "type(")
                   add_child(out, children[1], "", indent)
@@ -5151,6 +5154,7 @@ local function init_globals(lax)
                ["__eq"] = a_type({ typename = "function", args = TUPLE({ ANY, ANY }), rets = TUPLE({ BOOLEAN }) }),
                ["__lt"] = a_type({ typename = "function", args = TUPLE({ ANY, ANY }), rets = TUPLE({ BOOLEAN }) }),
                ["__le"] = a_type({ typename = "function", args = TUPLE({ ANY, ANY }), rets = TUPLE({ BOOLEAN }) }),
+               ["__close"] = a_type({ typename = "function", args = TUPLE({ a }), rets = TUPLE({}) }),
             },
          } end),
       }),
@@ -7256,7 +7260,9 @@ tl.type_check = function(ast, opts)
       if same_type(t, NIL) then
          return true
       end
-      t = resolve_nominal(t)
+      if t.typename ~= "function" then
+         t = resolve_nominal(t)
+      end
       return t.meta_fields and t.meta_fields["__close"] ~= nil
    end
 
