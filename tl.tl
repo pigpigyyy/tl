@@ -7773,6 +7773,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
             t = f
          else
             if not same_type(f, t) then
+               errmsg = errmsg .. string.format(" (types of fields '%s' and '%s' do not match)", field_names[1], k)
                t = nil
                break
             end
@@ -10185,6 +10186,15 @@ end
 -- High-level API
 --------------------------------------------------------------------------------
 
+local function read_full_file(fd: FILE): string, string
+   local bom <const> = "\xEF\xBB\xBF"
+   local content, err = fd:read("*a")
+   if content:sub(1, bom:len()) == bom then
+      content = content:sub(bom:len() + 1)
+   end
+   return content, err
+end
+
 tl.process = function(filename: string, env: Env): Result, string
    filename = tl.canonicalize_path(filename, nil)
 
@@ -10196,7 +10206,7 @@ tl.process = function(filename: string, env: Env): Result, string
       return nil, "could not open " .. filename .. ": " .. err
    end
 
-   local input: string; input, err = fd:read("*a")
+   local input: string; input, err = read_full_file(fd)
    fd:close()
    if not input then
       return nil, "could not read " .. filename .. ": " .. err
@@ -10284,7 +10294,7 @@ end
 local function tl_package_loader(module_name: string): any
    local found_filename, fd, tried = tl.search_module(module_name, false)
    if found_filename then
-      local input = fd:read("*a")
+      local input = read_full_file(fd)
       if not input then
          return table.concat(tried, "\n\t")
       end
