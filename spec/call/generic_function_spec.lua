@@ -180,7 +180,7 @@ describe("generic function", function()
    }))
 
    it("will accept if typevar is bound at a higher level", util.check [[
-      local function fun<T>()
+      local function fun<T>(another: T)
          local function parse_list<T>(list: {T}): T
             return list[1]
          end
@@ -461,6 +461,17 @@ describe("generic function", function()
       print(pok1)
       print(pok2)
       print(msg)
+   ]])
+
+   it("nested uses of generic record functions using the same names for type variables don't cause conflicts (#560)", util.check [[
+      local M = {}
+
+      function M.array_slice<T>(t: {T}, begin: integer, ed: integer): {T}
+      end
+
+      function M.array_prefix<T>(t: {T}, n: integer): {T}
+          return M.array_slice(t, 1, n+1)
+      end
    ]])
 end)
 

@@ -330,7 +330,8 @@ describe("record method", function()
 
       return t
    ]], {
-      { msg = "in return value: record (method: function(self, function(A)): T<A, B>) is not a record<A, B> (method: function(function(A)): T<A, B>): record field doesn't match: method: argument 1 expects record or nominal" },
+      { y = 10, msg = "in return value: record (method: function(self, function(A)): T<A, B>) is not a record (method: function(function(A)): T<A, B>): record field doesn't match: method: argument 1 expects record or nominal" },
+      { y = 12, msg = "in return value: record (method: function(self, function(A)): T<A, B>) is not a record (method: function(function(A)): T<A, B>): record field doesn't match: method: argument 1 expects record or nominal" },
    }))
 
    it("does not fail when declaring methods on untyped self (regression test for #427)", util.check [[
