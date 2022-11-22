@@ -78,18 +78,22 @@ describe("preload", function()
                type T = R
             end
             local inst: Mod
+            return inst
+         ]],
+         ["merged.tl"] = [[
+            local mod = require("mod")
             return {
-               inst = inst
+               mod = mod
             }
          ]],
          ["foo.tl"] = [[
-            local mod = require("mod")
-            local t: mod.inst.T
+            local merged = require("merged")
+            local t: merged.mod.T
             print(t.n)
          ]],
       })
 
-      local result, err = tl.process("foo.tl", assert(tl.init_env(false, nil, nil, {"mod"})))
+      local result, err = tl.process("foo.tl", assert(tl.init_env(false, nil, nil, {"mod", "merged"})))
 
       assert.same(nil, err)
       assert.same({}, result.syntax_errors)
