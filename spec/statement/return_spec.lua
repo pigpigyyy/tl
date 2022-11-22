@@ -97,6 +97,14 @@ describe("return", function()
       ]], {
          { msg = "in return value (inferred at foo.tl:2:13): got integer, expected string" }
       }))
+
+      it("accepting userdata record", util.check([[
+         local record R
+            userdata
+         end
+         local r: R
+         return r
+      ]]))
    end)
 
 end)
