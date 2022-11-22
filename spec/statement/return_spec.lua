@@ -1,3 +1,4 @@
+local tl = require("tl")
 local util = require("spec.util")
 
 describe("return", function()
@@ -97,6 +98,60 @@ describe("return", function()
       ]], {
          { msg = "in return value (inferred at foo.tl:2:13): got integer, expected string" }
       }))
+
+      it("with imported type alias", function ()
+         util.mock_io(finally, {
+            ["mod.tl"] = [[
+               local record R
+                  n: number
+               end
+               local record Mod
+                  type T = R
+               end
+               local inst: Mod
+               return inst
+            ]],
+            ["merged.tl"] = [[
+               local mod = require("mod")
+               return {
+                  mod = mod
+               }
+            ]],
+            ["foo.tl"] = [[
+               local merged = require("merged")
+               local t: merged.mod.T
+               print(t.n)
+            ]],
+         })
+
+         local result, err = tl.process("foo.tl", assert(tl.init_env()))
+
+         assert.same(nil, err)
+         assert.same({}, result.syntax_errors)
+         assert.same({}, result.type_errors)
+      end)
+
+      it("with imported userdata record", function ()
+         util.mock_io(finally, {
+            ["mod.tl"] = [[
+               local record R
+                  userdata
+               end
+               local r: R
+               return r
+            ]],
+            ["foo.tl"] = [[
+               local r = require("mod")
+               return r
+            ]],
+         })
+
+         local result, err = tl.process("foo.tl", assert(tl.init_env()))
+
+         assert.same(nil, err)
+         assert.same({}, result.syntax_errors)
+         assert.same({}, result.type_errors)
+      end)
    end)
 
 end)
