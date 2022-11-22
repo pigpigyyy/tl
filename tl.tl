@@ -4590,6 +4590,9 @@ local function show_type_base(t: Type, short: boolean, seen: {Type:string}): str
             table.insert(out, ">")
          end
          table.insert(out, " (")
+         if t.is_userdata then
+            table.insert(out, "(userdata)")
+         end
          if t.elements then
             table.insert(out, "{" .. show(t.elements) .. "}")
          end
@@ -5879,6 +5882,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
          local copy: Type = {}
          seen[orig_t] = copy
 
+         copy.is_userdata = t.is_userdata
          copy.opt = orig_t.opt
          copy.typename = t.typename
          copy.filename = t.filename
