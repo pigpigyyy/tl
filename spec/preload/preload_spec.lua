@@ -68,7 +68,7 @@ describe("preload", function()
       assert.same({}, result.syntax_errors)
       assert.same({}, result.type_errors)
    end)
-   it("can import type alias", function ()
+   it("can export type alias", function ()
       util.mock_io(finally, {
          ["mod.tl"] = [[
             local record R
@@ -90,6 +90,33 @@ describe("preload", function()
             local merged = require("merged")
             local t: merged.mod.T
             print(t.n)
+         ]],
+      })
+
+      local result, err = tl.process("foo.tl", assert(tl.init_env(false, nil, nil, {"mod", "merged"})))
+
+      assert.same(nil, err)
+      assert.same({}, result.syntax_errors)
+      assert.same({}, result.type_errors)
+   end)
+   it("can export userdata record", function ()
+      util.mock_io(finally, {
+         ["mod.tl"] = [[
+            local record R
+               userdata
+            end
+            local r: R
+            return r
+         ]],
+         ["merged.tl"] = [[
+            local mod = require("mod")
+            return {
+               mod = mod
+            }
+         ]],
+         ["foo.tl"] = [[
+            local merged = require("merged")
+            print(merged.mod)
          ]],
       })
 
