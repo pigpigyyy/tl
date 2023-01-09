@@ -535,5 +535,16 @@ describe("generic function", function()
          a.f()
       end
    ]])
+
+   it("should resolve union with typearg in return value (regression test for #604)", util.check [[
+      local record A
+         f: function()
+      end
+      local create_by_name: function<T>(name: string): T | nil
+      local a: A | nil = create_by_name("A")
+      if not a is nil then
+         a.f()
+      end
+   ]])
 end)
 

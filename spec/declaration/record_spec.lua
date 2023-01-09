@@ -756,27 +756,7 @@ describe("embedding", function()
       local a: A = b
       a = c
    ]])
-   it("should allow for generics", util.check [[
-      local record A<T>
-         property_of_a: T
-      end
-      local record B<T>
-         embed A<T>
-         property_of_b: T
-      end
-      local record C<T>
-         embed B<T>
-         property_of_c: string
-      end
-      local b: B<number> = {}
-      local c: C<number> = {}
-      print(b.property_of_a + 1, c.property_of_b + c.property_of_a, c.property_of_c)
-      local function f(a: A<number>, b: B<number>) end
-      f(b, b)
-      f(c, c)
-      local a: A<number> = b
-      a = c
-   ]])
+
    it("embed multiple records", util.check [[
       local record A
          x: number

@@ -27,6 +27,7 @@ local record tl
    record TypeCheckOptions
       lax: boolean
       filename: string
+      module_name: string
       gen_compat: CompatMode
       gen_target: TargetMode
       env: Env
@@ -122,8 +123,8 @@ local record tl
    end
 
    load: function(string, string, LoadMode, {any:any}): LoadFunction, string
-   process: function(string, Env): (Result, string)
-   process_string: function(string, boolean, Env, ?string): Result
+   process: function(string, Env, string, FILE): (Result, string)
+   process_string: function(string, boolean, Env, ?string, ?string): Result
    gen: function(string, Env): string
    type_check: function(Node, TypeCheckOptions): Result, string
    init_env: function(?boolean, ?(boolean | CompatMode), ?TargetMode, ?{string}): Env, string
@@ -267,9 +268,10 @@ local enum TokenKind
    "identifier"
    "number"
    "integer"
-   "$invalid_string$"
-   "$invalid_number$"
-   "$invalid$"
+   "$ERR unfinished_comment$"
+   "$ERR invalid_string$"
+   "$ERR invalid_number$"
+   "$ERR invalid$"
    "$EOF$"
 end
 
@@ -333,21 +335,21 @@ do
       ["got /"] = "op",
       ["got :"] = "op",
       -- ["got --["]: drop comment
-      ["string single"] = "$invalid_string$",
-      ["string single got \\"] = "$invalid_string$",
-      ["string double"] = "$invalid_string$",
-      ["string double got \\"] = "$invalid_string$",
-      ["string long"] = "$invalid_string$",
-      ["string long got ]"] = "$invalid_string$",
+      ["string single"] = "$ERR invalid_string$",
+      ["string single got \\"] = "$ERR invalid_string$",
+      ["string double"] = "$ERR invalid_string$",
+      ["string double got \\"] = "$ERR invalid_string$",
+      ["string long"] = "$ERR invalid_string$",
+      ["string long got ]"] = "$ERR invalid_string$",
       -- ["comment short"]: drop comment
-      -- ["comment long"]: drop comment
-      -- ["comment long got ]"]: drop comment
+      ["comment long"] = "$ERR unfinished_comment$",
+      ["comment long got ]"] = "$ERR unfinished_comment$",
       ["number dec"] = "integer",
       ["number decfloat"] = "number",
       ["number hex"] = "integer",
       ["number hexfloat"] = "number",
       ["number power"] = "number",
-      ["number powersign"] = "$invalid_number$",
+      ["number powersign"] = "$ERR invalid_number$",
    }
 
    local keywords: {string:boolean} = {
@@ -492,7 +494,7 @@ do
       end
    end
 
-   function tl.lex(input: string): {Token}, {Token}
+   function tl.lex(input: string, filename: string): {Token}, {Error}
       local tokens: {Token} = {}
 
       local state: LexState = "any"
@@ -504,7 +506,7 @@ do
       local lc_close_lvl = 0
       local ls_open_lvl = 0
       local ls_close_lvl = 0
-      local errs: {Token} = {}
+      local errs: {Error} = {}
       local nt = 0
 
       local tx: integer
@@ -574,6 +576,26 @@ do
          in_token = false
       end
 
+      local function add_syntax_error()
+         local t = tokens[nt]
+         local msg: string
+         if t.kind == "$ERR invalid_string$" then
+            msg = "malformed string"
+         elseif t.kind == "$ERR invalid_number$" then
+            msg = "malformed number"
+         elseif t.kind == "$ERR unfinished_comment$" then
+            msg = "unfinished long comment"
+         else
+            msg = "invalid token '" .. t.tk .. "'"
+         end
+         table.insert(errs, {
+            filename = filename,
+            y = t.y,
+            x = t.x,
+            msg = msg,
+         })
+      end
+
       local len = #input
       if input:sub(1,2) == "#!" then
          i = input:find("\n")
@@ -618,8 +640,8 @@ do
                   end_token(k, c)
                elseif not lex_space[c] then
                   begin_token()
-                  end_token_here("$invalid$")
-                  table.insert(errs, tokens[#tokens])
+                  end_token_here("$ERR invalid$")
+                  add_syntax_error()
                end
             end
          elseif state == "identifier" then
@@ -773,8 +795,8 @@ do
             local skip, valid = lex_string_escape(input, i, c)
             i = i + skip
             if not valid then
-               end_token_here("$invalid_string$")
-               table.insert(errs, tokens[#tokens])
+               end_token_here("$ERR invalid_string$")
+               add_syntax_error()
             end
             x = x + skip
             state = "string double"
@@ -789,8 +811,8 @@ do
             local skip, valid = lex_string_escape(input, i, c)
             i = i + skip
             if not valid then
-               end_token_here("$invalid_string$")
-               table.insert(errs, tokens[#tokens])
+               end_token_here("$ERR invalid_string$")
+               add_syntax_error()
             end
             x = x + skip
             state = "string single"
@@ -878,9 +900,9 @@ do
             elseif lex_decimals[c] then
                state = "number power"
             else
-               end_token_here("$invalid_number$")
-               table.insert(errs, tokens[#tokens])
-               state = "any" -- FIXME report malformed number
+               end_token_here("$ERR invalid_number$")
+               add_syntax_error()
+               state = "any"
             end
          elseif state == "number power" then
             if not lex_decimals[c] then
@@ -894,7 +916,9 @@ do
       if in_token then
          if last_token_kind[state] then
             end_token_prev(last_token_kind[state])
-            if keywords[tokens[nt].tk] then
+            if last_token_kind[state]:sub(1, 4) == "$ERR" then
+               add_syntax_error()
+            elseif keywords[tokens[nt].tk] then
                tokens[nt].kind = "keyword"
             end
          else
@@ -904,7 +928,7 @@ do
 
       table.insert(tokens, { x = x + 1, y = y, i = i, tk = "$EOF$", kind = "$EOF$" })
 
-      return tokens, (#errs > 0) and errs
+      return tokens, errs
    end
 end
 
@@ -985,6 +1009,7 @@ local enum TypeName
    "unresolved_emptytable_value"
    "unresolved_typearg"
    "unresolvable_typearg"
+   "circular_require"
    "tuple"
    "poly" -- intersection types, currently restricted to polymorphic functions defined inside records
    "any"
@@ -1886,9 +1911,9 @@ local function parse_literal(ps: ParseState, i: integer): integer, Node
       return parse_table_literal(ps, i)
    elseif kind == "..." then
       return verify_kind(ps, i, "...")
-   elseif kind == "$invalid_string$" then
+   elseif kind == "$ERR invalid_string$" then
       return fail(ps, i, "malformed string")
-   elseif kind == "$invalid_number$" then
+   elseif kind == "$ERR invalid_number$" then
       return fail(ps, i, "malformed number")
    end
    return fail(ps, i, "syntax error")
@@ -2941,6 +2966,16 @@ local function parse_type_declaration(ps: ParseState, i: integer, node_name: Nod
    end
 
    i = verify_tk(ps, i, "=")
+
+   if ps.tokens[i].kind == "identifier" and ps.tokens[i].tk == "require" then
+      local istart = i
+      i, asgn.value = parse_call_or_assignment(ps, i)
+      if asgn.value and not node_is_require_call(asgn.value) then
+         fail(ps, istart, "require() for type declarations must have a literal argument")
+      end
+      return i, asgn
+   end
+
    i, asgn.value = parse_newtype(ps, i)
    if not asgn.value then
       return i
@@ -3109,7 +3144,7 @@ local function clear_redundant_errors(errors: {Error})
    end
 end
 
-function tl.parse_program(tokens: {Token}, errs: {Error}, filename: string): integer, Node, {string}
+function tl.parse_program(tokens: {Token}, errs: {Error}, filename: string): Node, {string}
    filename = tl.canonicalize_path(filename, nil)
 
    errs = errs or {}
@@ -3119,10 +3154,16 @@ function tl.parse_program(tokens: {Token}, errs: {Error}, filename: string): int
       filename = filename or "",
       required_modules = {},
    }
-   local i, node = parse_statements(ps, 1, true)
+   local _, node = parse_statements(ps, 1, true)
 
    clear_redundant_errors(errs)
-   return i, node, ps.required_modules
+   return node, ps.required_modules
+end
+
+function tl.parse(input: string, filename: string): Node, {Error}, {string}
+   local tokens, errs = tl.lex(input, filename)
+   local node, required_modules = tl.parse_program(tokens, errs, filename)
+   return node, errs, required_modules
 end
 
 --------------------------------------------------------------------------------
@@ -4246,6 +4287,7 @@ end
 local NONE = a_type { typename = "none" }
 local INVALID = a_type { typename = "invalid" }
 local UNKNOWN = a_type { typename = "unknown" }
+local CIRCULAR_REQUIRE = a_type { typename = "circular_require" }
 
 local FUNCTION = a_type { typename = "function", args = VARARG { ANY }, rets = VARARG { ANY } }
 
@@ -4665,7 +4707,7 @@ local function show_type_base(t: Type, short: boolean, seen: {Type:string}): str
    elseif t.typename == "bad_nominal" then
       return table.concat(t.names, ".") .. " (an unknown type)"
    else
-      return tostring(t)
+      return "<" .. t.typename .. " " .. tostring(t) .. ">"
    end
 end
 
@@ -4691,13 +4733,33 @@ local function search_for(module_name: string, suffix: string, path: string, tri
       local slash_name = module_name:gsub("%.", "/")
       local filename = entry:gsub("?", slash_name)
       local tl_filename = filename:gsub("%.lua$", suffix)
-      local fd = io.open(tl_filename, "r")
+      local fd = io.open(tl_filename, "rb")
       if fd then
          return tl_filename, fd, tried
       end
       table.insert(tried, "no file '" .. tl_filename .. "'")
    end
    return nil, nil, tried
+end
+
+local function filename_to_module_name(filename: string): string
+   local path = os.getenv("TL_PATH") or package.path
+   for entry in path:gmatch("[^;]+") do
+      entry = entry:gsub("%.", "%%.")
+      local lua_pat = "^" .. entry:gsub("%?", ".+") .. "$"
+      local d_tl_pat = lua_pat:gsub("%%.lua%$", "%%.d%%.tl$")
+      local tl_pat = lua_pat:gsub("%%.lua%$", "%%.tl$")
+
+      for _, pat in ipairs({ tl_pat, d_tl_pat, lua_pat }) do
+         local cap = filename:match(pat)
+         if cap then
+            return (cap:gsub("[/\\]", "."))
+         end
+      end
+   end
+
+   -- fallback:
+   return (filename:gsub("%.lua$", ""):gsub("%.d%.tl$", ""):gsub("%.tl$", ""):gsub("[/\\]", "."))
 end
 
 function tl.search_module(module_name: string, search_dtl: boolean): string, FILE, {string}
@@ -4754,26 +4816,19 @@ local function fill_field_order(t: Type)
 end
 
 local function require_module(module_name: string, lax: boolean, env: Env): Type, boolean
-   local modules = env.modules
-
-   if modules[module_name] then
-      return modules[module_name], true
+   local mod = env.modules[module_name]
+   if mod then
+      return mod, true
    end
-   modules[module_name] = INVALID
 
    local found, fd = tl.search_module(module_name, true)
    if found and (lax or found:match("tl$") as boolean) then
-      fd:close()
-      local found_result, err: Result, string = tl.process(found, env)
+      local found_result, err: Result, string = tl.process(found, env, module_name, fd)
       assert(found_result, err)
 
-      if not found_result.type then
-         found_result.type = BOOLEAN
-      end
-
-      env.modules[module_name] = found_result.type
-
       return found_result.type, true
+   elseif fd then
+      fd:close()
    end
 
    return INVALID, found ~= nil
@@ -4794,11 +4849,8 @@ local function add_compat_entries(program: Node, used_set: {string: boolean}, ge
    local function load_code(name: string, text: string)
       local code: Node = compat_code_cache[name]
       if not code then
-         local tokens = tl.lex(text)
-         local _: integer
-         _, code = tl.parse_program(tokens, {}, "@internal")
+         code = tl.parse(text, "@internal")
          tl.type_check(code, { filename = "<internal>", lax = false, gen_compat = "off" })
-         code = code
          compat_code_cache[name] = code
       end
       for _, c in ipairs(code) do
@@ -5554,6 +5606,11 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
          return nil, err
       end
    end
+
+   if opts.module_name then
+      env.modules[opts.module_name] = a_type { typename = "typetype", def = CIRCULAR_REQUIRE }
+   end
+
    local lax = opts.lax
    local filename = opts.filename
 
@@ -5619,17 +5676,15 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
       }, nil
    end
 
-   local type TypevarCallback = function(Type): Type, Type, boolean
-   local type TypeargCallback = function(Type): Type
-   local resolve_typevars: function (typ: Type, fn_var?: TypevarCallback, fn_arg?: TypeargCallback): boolean, Type, {Error}
+   local type ResolveType = function(Type): Type
+   local resolve_typevars: function (typ: Type, fn_var?: ResolveType, fn_arg?: ResolveType): boolean, Type, {Error}
 
    local function fresh_typevar(t: Type): Type, Type, boolean
-      local rt = a_type {
+      return a_type {
          opt = t.opt,
          typename = "typevar",
          typevar = (t.typevar:gsub("@.*", "")) .. "@" .. fresh_typevar_ctr
       }
-      return t, rt, false
    end
 
    local function fresh_typearg(t: Type): Type
@@ -5827,51 +5882,47 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
       ["unknown"] = true,
    }
 
-   local function default_resolve_typevars_callback(t: Type): Type, Type, boolean
-      local orig_t = t
-      t = find_var_type(t.typevar)
-      local rt: Type
-      if not t then
-         rt = orig_t
-      elseif t.typename == "string" then
+   local function default_resolve_typevars_callback(t: Type): Type
+      local rt = find_var_type(t.typevar)
+      if not rt then
+         return nil
+      elseif rt.typename == "string" then
          -- tk is not propagated
-         rt = STRING
-      elseif no_nested_types[t.typename]
-             or (t.typename == "nominal" and not t.typevals) then
-         rt = t
+         return STRING
       end
-      return t, rt, t ~= nil
+      return rt
    end
 
-   resolve_typevars = function(typ: Type, fn_var?: TypevarCallback, fn_arg?: TypeargCallback): boolean, Type, {Error}
+   resolve_typevars = function(typ: Type, fn_var?: ResolveType, fn_arg?: ResolveType): boolean, Type, {Error}
       local errs: {Error}
       local seen: {Type:Type} = {}
       local resolved: {string:boolean} = {}
 
       fn_var = fn_var or default_resolve_typevars_callback
 
-      local function resolve(t: Type): Type
+      local function resolve(t: Type, all_same: boolean): Type, boolean
+         local same = true
 
          -- avoid copies of types that do not contain type variables
          if no_nested_types[t.typename] or (t.typename == "nominal" and not t.typevals) then
-            return t
+            return t, all_same
          end
 
          if seen[t] then
-            return seen[t]
+            return seen[t], all_same
          end
 
          local orig_t = t
          if t.typename == "typevar" then
-            local rt: Type
-            local has_resolved: boolean
-            t, rt, has_resolved = fn_var(t)
-            if has_resolved then
-               resolved[orig_t.typevar] = true
-            end
+            local rt = fn_var(t)
             if rt then
-               seen[orig_t] = rt
-               return rt
+               resolved[orig_t.typevar] = true
+               if no_nested_types[rt.typename] or (rt.typename == "nominal" and not rt.typevals) then
+                  seen[orig_t] = rt
+                  return rt, false
+               end
+               same = false
+               t = rt
             end
          end
 
@@ -5882,7 +5933,6 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
          copy.opt = orig_t.opt
          copy.typename = t.typename
          copy.filename = t.filename
-         copy.typeid = t.typeid
          copy.x = t.x
          copy.y = t.y
          copy.yend = t.yend
@@ -5890,11 +5940,11 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
          copy.names = t.names -- which types have this, exactly?
 
          for i, tf in ipairs(t) do
-            copy[i] = resolve(tf)
+            copy[i], same = resolve(tf, same)
          end
 
          if t.typename == "array" then
-            copy.elements = resolve(t.elements)
+            copy.elements, same = resolve(t.elements, same)
             -- inferred_len is not propagated
          elseif t.typename == "typearg" then
             if fn_arg then
@@ -5907,46 +5957,46 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
          elseif t.typename == "typevar" then
             copy.typevar = t.typevar
          elseif is_typetype(t) then
-            copy.def = resolve(t.def)
+            copy.def, same = resolve(t.def, same)
          elseif t.typename == "nominal" then
-            copy.typevals = resolve(t.typevals)
+            copy.typevals, same = resolve(t.typevals, same)
             copy.found = t.found
          elseif t.typename == "function" then
             if t.typeargs then
                copy.typeargs = {}
                for i, tf in ipairs(t.typeargs) do
-                  copy.typeargs[i] = resolve(tf)
+                  copy.typeargs[i], same = resolve(tf, same)
                end
             end
 
             copy.is_method = t.is_method
             copy.min_arity = t.min_arity
-            copy.args = resolve(t.args)
-            copy.rets = resolve(t.rets)
+            copy.args, same = resolve(t.args, same)
+            copy.rets, same = resolve(t.rets, same)
          elseif t.typename == "record" or t.typename == "arrayrecord" then
             if t.typeargs then
                copy.typeargs = {}
                for i, tf in ipairs(t.typeargs) do
-                  copy.typeargs[i] = resolve(tf)
+                  copy.typeargs[i], same = resolve(tf, same)
                end
             end
 
             if t.embeds then
                copy.embeds = {}
                for i, tf in ipairs(t.embeds) do
-                  copy.embeds[i] = resolve(tf)
+                  copy.embeds[i], same = resolve(tf, same)
                end
             end
 
             if t.elements then
-               copy.elements = resolve(t.elements)
+               copy.elements, same = resolve(t.elements, same)
             end
 
             copy.fields = {}
             copy.field_order = {}
             for i, k in ipairs(t.field_order) do
                copy.field_order[i] = k
-               copy.fields[k] = resolve(t.fields[k])
+               copy.fields[k], same = resolve(t.fields[k], same)
             end
 
             if t.meta_fields then
@@ -5954,38 +6004,39 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
                copy.meta_field_order = {}
                for i, k in ipairs(t.meta_field_order) do
                   copy.meta_field_order[i] = k
-                  copy.meta_fields[k] = resolve(t.meta_fields[k])
+                  copy.meta_fields[k], same = resolve(t.meta_fields[k], same)
                end
             end
 
             copy.readonlys = t.readonlys
          elseif t.typename == "map" then
-            copy.keys = resolve(t.keys)
-            copy.values = resolve(t.values)
+            copy.keys, same = resolve(t.keys, same)
+            copy.values, same = resolve(t.values, same)
          elseif t.typename == "union" then
             copy.types = {}
             for i, tf in ipairs(t.types) do
-               copy.types[i] = resolve(tf)
+               copy.types[i], same = resolve(tf, same)
             end
 
             copy, errs = validate_union(t as Node, copy, true, errs)
          elseif t.typename == "poly" or t.typename == "tupletable" then
             copy.types = {}
             for i, tf in ipairs(t.types) do
-               copy.types[i] = resolve(tf)
+               copy.types[i], same = resolve(tf, same)
             end
          elseif t.typename == "tuple" then
             copy.is_va = t.is_va
          end
 
-         return copy
+         copy.typeid = same and orig_t.typeid or new_typeid()
+         return copy, same and all_same
       end
 
-      local copy = resolve(typ)
+      local copy, same = resolve(typ, true)
       if errs then
          return false, INVALID, errs
       end
-      if copy.typeargs then
+      if copy.typeargs and not same then
          for i = #copy.typeargs, 1, -1 do
             if resolved[copy.typeargs[i].typearg] then
                table.remove(copy.typeargs, i)
@@ -6573,6 +6624,12 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
                typetype = typetype.def.found
                assert(is_typetype(typetype))
             end
+
+            if typetype.def.typename == "circular_require" then
+               -- return, but do not store resolution
+               return typetype.def
+            end
+
             if typetype.def.typename == "nominal" then
                typetype = typetype.def.found
                assert(is_typetype(typetype))
@@ -6606,7 +6663,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
       local embeds = t1.embeds
       if embeds and #embeds > 0 then
          for i = 1, #embeds do
-            if embeds[i].typeid == t2.typeid then
+            if is_a(embeds[i], t2) then
                return true
             elseif embeds[i].embeds then
                return is_embedded(embeds[i], t2)
@@ -6706,6 +6763,10 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
    same_type = function(t1: Type, t2: Type): boolean, {Error}
       assert(type(t1) == "table")
       assert(type(t2) == "table")
+
+      if t1.typeid == t2.typeid then
+         return true
+      end
 
       if t1.typename == "typevar" or t2.typename == "typevar" then
          return compare_and_infer_typevars(t1, t2, same_type)
@@ -6945,6 +7006,10 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
       assert(type(t2) == "table")
 
       if lax and (is_unknown(t1) or is_unknown(t2)) then
+         return true
+      end
+
+      if t1.typeid == t2.typeid then
          return true
       end
 
@@ -7371,6 +7436,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
          if func.meta_fields and func.meta_fields["__call"] then
             table.insert(args, 1, func)
             func = func.meta_fields["__call"]
+            func = resolve_tuple_and_nominal(func)
             is_method = true
          end
       end
@@ -8758,6 +8824,14 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
       return t, infertype ~= nil
    end
 
+   local function get_type_declaration(node: Node): Type, Variable
+      if node.value.kind == "op" and node.value.op.op == "@funcall" then
+         return special_functions["require"](node.value, find_var_type("require"), { STRING }, 0)
+      else
+         return resolve_nominal_typetype(node.value.newtype)
+      end
+   end
+
    local visit_node: Visitor<NodeKind, Node, Type> = {}
 
    visit_node.cbs = {
@@ -8782,7 +8856,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
       ["local_type"] = {
          before = function(node: Node)
             local name = node.var.tk
-            local resolved, aliasing = resolve_nominal_typetype(node.value.newtype)
+            local resolved, aliasing = get_type_declaration(node)
             local var = add_var(node.var, name, resolved, node.var.attribute)
             node.value.type = resolved
             if aliasing then
@@ -8801,7 +8875,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
             local name = node.var.tk
             local unresolved = get_unresolved("any_scope", node)
             if node.value then
-               local resolved, aliasing = resolve_nominal_typetype(node.value.newtype)
+               local resolved, aliasing = get_type_declaration(node)
                local added = add_global(node.var, name, resolved)
                node.value.newtype = resolved
                if aliasing then
@@ -9559,12 +9633,20 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
             local orig_b = b
             local ra = a and resolve_tuple_and_nominal(a)
             local rb = b and resolve_tuple_and_nominal(b)
-            if ra and is_typetype(ra) and ra.def.typename == "record" then
+
+            if ra.typename == "circular_require" or (ra.def and ra.def.typename == "circular_require") then
+               node_error(node, "cannot dereference a type from a circular require")
+               node.type = INVALID
+               return node.type
+            end
+
+            if is_typetype(ra) and ra.def.typename == "record" then
                ra = ra.def
             end
             if rb and is_typetype(rb) and rb.def.typename == "record" then
                rb = rb.def
             end
+
             if node.op.op == "@funcall" then
                if lax and is_unknown(a) then
                   if node.e1.op and node.e1.op.op == ":" and node.e1.e1.kind == "variable" then
@@ -10008,7 +10090,9 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
                      typ.typename = "typevar"
                      typ.typevar = t.typearg
                   else
-                     typ.found = t
+                     if not (t.def and t.def.typename == "circular_require") then
+                        typ.found = t
+                     end
                   end
                else
                   local name = typ.names[1]
@@ -10078,7 +10162,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
    local result = {
       ast = ast,
       env = env,
-      type = module_type,
+      type = module_type or BOOLEAN,
       filename = filename,
       warnings = warnings,
       type_errors = errors,
@@ -10088,6 +10172,10 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
 
    env.loaded[filename] = result
    table.insert(env.loaded_order, filename)
+
+   if opts.module_name then
+      env.modules[opts.module_name] = result.type
+   end
 
    return result
 end
@@ -10384,18 +10472,23 @@ local function read_full_file(fd: FILE): string, string
    return content, err
 end
 
-tl.process = function(filename: string, env: Env): Result, string
+tl.process = function(filename: string, env: Env, module_name: string, fd: FILE): Result, string
    filename = tl.canonicalize_path(filename, nil)
 
    if env and env.loaded and env.loaded[filename] then
       return env.loaded[filename]
    end
-   local fd, err = io.open(filename, "r")
+
+   local input, err: string, string
+
    if not fd then
-      return nil, "could not open " .. filename .. ": " .. err
+      fd, err = io.open(filename, "rb")
+      if not fd then
+         return nil, "could not open " .. filename .. ": " .. err
+      end
    end
 
-   local input: string; input, err = read_full_file(fd)
+   input, err = read_full_file(fd)
    fd:close()
    if not input then
       return nil, "could not read " .. filename .. ": " .. err
@@ -10413,10 +10506,14 @@ tl.process = function(filename: string, env: Env): Result, string
       is_lua = input:match("^#![^\n]*lua[^\n]*\n") as boolean
    end
 
-   return tl.process_string(input, is_lua, env, filename)
+   return tl.process_string(input, is_lua, env, filename, module_name)
 end
 
-function tl.process_string(input: string, is_lua: boolean, env: Env, filename?: string): Result
+function tl.process_string(input: string, is_lua: boolean, env: Env, filename?: string, module_name?: string): Result
+   if filename and not module_name then
+      module_name = filename_to_module_name(filename)
+   end
+
    filename = tl.canonicalize_path(filename, nil)
 
    env = env or tl.init_env(is_lua)
@@ -10425,25 +10522,14 @@ function tl.process_string(input: string, is_lua: boolean, env: Env, filename?: 
    end
    filename = filename or ""
 
-   local syntax_errors: {Error} = {}
-   local tokens, errs = tl.lex(input)
-   if errs then
-      for _, err in ipairs(errs) do
-         table.insert(syntax_errors, {
-            y = err.y,
-            x = err.x,
-            msg = "invalid token '" .. err.tk .. "'",
-            filename = filename,
-         })
-      end
-   end
-
-   local _, program = tl.parse_program(tokens, syntax_errors, filename)
+   local program, syntax_errors = tl.parse(input, filename)
 
    if (not env.keep_going) and #syntax_errors > 0 then
       local result = {
          ok = false,
          filename = filename,
+         module_name = module_name,
+         type = BOOLEAN,
          type_errors = {},
          syntax_errors = syntax_errors,
          env = env,
@@ -10455,6 +10541,7 @@ function tl.process_string(input: string, is_lua: boolean, env: Env, filename?: 
 
    local opts: TypeCheckOptions = {
       filename = filename,
+      module_name = module_name,
       lax = is_lua,
       gen_compat = env.gen_compat,
       gen_target = env.gen_target,
@@ -10488,26 +10575,29 @@ local function tl_package_loader(module_name: string): any
          return table.concat(tried, "\n\t")
       end
       fd:close()
-      local errs: {Error} = {}
-      local _, program = tl.parse_program(tl.lex(input), errs, module_name)
+      local program, errs = tl.parse(input, found_filename)
       if #errs > 0 then
          error(found_filename .. ":" .. errs[1].y .. ":" .. errs[1].x .. ": " .. errs[1].msg)
       end
       local lax = not not found_filename:match("lua$")
-      if not tl.package_loader_env then
+
+      local env = tl.package_loader_env
+      if not env then
          tl.package_loader_env = tl.init_env(lax)
+         env = tl.package_loader_env
       end
 
       tl.type_check(program, {
          lax = lax,
          filename = found_filename,
-         env = tl.package_loader_env,
+         module_name = module_name,
+         env = env,
          run_internal_compiler_checks = false,
       })
 
       -- TODO: should this be a hard error? this seems analogous to
       -- finding a lua file with a syntax error in it
-      local code = assert(tl.pretty_print_ast(program, tl.package_loader_env.gen_target, true))
+      local code = assert(tl.pretty_print_ast(program, env.gen_target, true))
       local chunk, err = load(code, "@" .. found_filename, "t")
       if chunk then
          return function(): any
@@ -10542,9 +10632,7 @@ function tl.target_from_lua_version(str: string): TargetMode
 end
 
 tl.load = function(input: string, chunkname: string, mode: LoadMode, ...: {any:any}): LoadFunction, string
-   local tokens = tl.lex(input)
-   local errs: {Error} = {}
-   local _, program = tl.parse_program(tokens, errs, chunkname)
+   local program, errs = tl.parse(input, chunkname)
    if #errs > 0 then
       return nil, (chunkname or "") .. ":" .. errs[1].y .. ":" .. errs[1].x .. ": " .. errs[1].msg
    end

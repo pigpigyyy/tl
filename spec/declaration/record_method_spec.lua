@@ -433,4 +433,15 @@ describe("record method", function()
    ]], {
    }))
 
+   it("does not cause conflicts with type variables (regression test for #610)", util.check [[
+      local MyObj = {}
+
+      function MyObj.do_something<T>(array: {T}): {T}
+         return array
+      end
+
+      function MyObj.test_fails<T>(array: {T}): {T}
+         return MyObj.do_something(array)
+      end
+   ]])
 end)
