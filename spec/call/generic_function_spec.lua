@@ -530,8 +530,9 @@ describe("generic function", function()
          f: function()
       end
       local create_by_name: function<T>(name: string): T | nil
-      local a: A | nil = create_by_name("A")
-      if not a is nil then
+      local res: A | nil = create_by_name("A")
+      if not res is nil then
+         local a = res
          a.f()
          local function _()
             a.f()
