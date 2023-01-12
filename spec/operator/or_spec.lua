@@ -34,8 +34,13 @@ describe("or", function()
 
       local u: string | R1 = "hello"
 
+      if math.random(2) == 0 then
+         u = r1
+      end
+
       local u2 = u or r1
       u2 = "world" -- u2 is a u
+      u2 = r1      -- u2 is a u
    ]])
 
    it("string or enum matches enum", util.check [[
@@ -104,6 +109,13 @@ describe("or", function()
       local x: number | string
 
       local s: number | string = x is string and x .. "!" or x + 1
+   ]])
+
+   it("produces a union if expected context asks for one as a nominal", util.check [[
+      local type T = number | string
+      local x: T
+
+      local s: T = x is string and x .. "!" or x + 1
    ]])
 
    it("does not produce a union if expected but both sides are the same type (regression test for #551)", util.check [[

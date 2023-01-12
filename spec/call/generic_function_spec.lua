@@ -106,7 +106,7 @@ describe("generic function", function()
 
       local x: number = use_id("hello", string_id)
    ]], {
-      { msg = "got string, expected number" }
+      { msg = 'got string "hello", expected number' }
    }))
 
    it("can use the function along with an indirect typevar", util.check [[
@@ -136,7 +136,8 @@ describe("generic function", function()
 
       local x: number = use_id({"hello"}, string_id)
    ]], {
-      { msg = "got string, expected number" }
+      { msg = 'at index 1: got string "hello", expected number' },
+      { msg = "argument 2: argument 1: got string, expected number" },
    }))
 
    it("can use the function along with an indirect typevar", util.check [[
@@ -524,18 +525,6 @@ describe("generic function", function()
       local _bar: string = Container:resolve()
    ]])
 
-   it("should resolve union with typearg in return value", util.check [[
-      local record A
-         f: function()
-      end
-
-      local create_by_name: function<T>(name: string): T | nil
-      local a: A | nil = create_by_name("A")
-      if not a is nil then
-         a.f()
-      end
-   ]])
-
    it("should resolve union with typearg in return value (regression test for #604)", util.check [[
       local record A
          f: function()
@@ -544,6 +533,9 @@ describe("generic function", function()
       local a: A | nil = create_by_name("A")
       if not a is nil then
          a.f()
+         local function _()
+            a.f()
+         end
       end
    ]])
 end)

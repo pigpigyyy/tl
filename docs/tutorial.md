@@ -463,7 +463,7 @@ where the record type is defined:
 
 ```
 function Point.new(x: number, y: number): Point
-   local self = setmetatable({} as Point, { __index = Point })
+   local self: Point = setmetatable({}, { __index = Point })
    self.x = x or 0
    self.y = y or 0
    return self
@@ -594,26 +594,26 @@ rec_mt = {
       return tostring(self.x * n) .. s
    end,
    __add = function(a: Rec, b: Rec): Rec
-      local res = setmetatable({} as Rec, rec_mt)
+      local res: Rec = setmetatable({}, rec_mt)
       res.x = a.x + b.x
       return res
    end,
 }
 
-local r = setmetatable({ x = 10 } as Rec, rec_mt)
-local s = setmetatable({ x = 20 } as Rec, rec_mt)
+local r: Rec = setmetatable({ x = 10 }, rec_mt)
+local s: Rec = setmetatable({ x = 20 }, rec_mt)
 
 r.x = 12
 print(r("!!!", 1000)) -- prints 12000!!!
 print((r + s).x)      -- prints 32
 ```
 
-Note the use of the `as` operator to specify the type of the raw tables when
-using `setmetatable`. The Teal standard library definiton of `setmetatable` is
-`function<T>(T, metatable<T>)`, so casting the table to the correct record
-type in the first argument assigns the type variable `T` in that call, causing
-it to propagate to the second argument's type, matching the correct metatable
-type.
+Note that we explicitly declare variables as `Rec` when initializing the
+declaration with `setmetatable`. The Teal standard library definiton of
+`setmetatable` is `function<T>(T, metatable<T>): T`, so declaring the correct
+record type in the declaration assigns the record type to the type variable
+`T` in the return value of the function call, causing it to propagate to the
+argument types, matching the correct table and metatable types.
 
 Operator metamethods for integer division `//` and bitwise operators are
 supported even when Teal runs on top of Lua versions that do not support them
@@ -831,18 +831,117 @@ Some Lua libraries use complex dynamic types that can't be easily represented
 in Teal. In those cases, using `any` and making explicit casts is our last
 resort.
 
-## Const variables
+## Variable attributes
 
-Teal supports the `<const>` annotation, like that of Lua 5.4 (it works at compile
-time, even if you're running a different version of Lua). Do note however that
-this is an annotation for variables, and not values: the contents of a value
-set to a const variable are not constant:
+Teal supports variable annotations, with similar syntax and behavior to those
+from Lua 5.4. They are:
+
+### Const variables
+
+The `<const>` annotation works in Teal like it does in Lua 5.4 (it works at
+compile time, even if you're running a different version of Lua). Do note
+however that this is annotation for variables, and not values: the contents
+of a value set to a const variable are not constant.
 
 ```
 local xs <const> = {1,2,3}
 xs[1] = 999 -- ok! the array is not frozen
 xs = {} -- Error! can't replace the array in variable xs
 ```
+
+### To-be-closed variables
+
+The `<close>` annotation from Lua 5.4 is only supported in Teal if your
+code generation target is Lua 5.4 (see the [compiler options](compiler_options.md)
+documentation for details on code generation targets). These work just
+[like they do in Lua 5.4](https://www.lua.org/manual/5.4/manual.html#3.3.8).
+
+```
+local contents = {}
+for _, name in ipairs(filenames) do
+   local f <close> = assert(io.open(name, "r"))
+   contents[name] = f:read("*a")
+   -- no need to call f:close() because files have a __close metamethod
+end
+```
+
+### Total variables
+
+The `<total>` annotation is specific to Teal. It declares a const variable
+assigned to a table value in which all possible keys need to be explicitly
+declared.
+
+Of course, not all types allow you to enumerate all possible keys: there is an
+infinite number (well, not infinite because we're talking about computers, but
+an impractically large number!) of possible strings and numbers, so maps keyed
+by these types can't ever be total. Examples of valid key types for a total
+map are booleans (for which there are only two possible values) and, most
+usefully, enums.
+
+Enums are the prime case for total variables: it is common to declare a
+number of cases in an enum and then to have a map of values that handle
+each of these cases. By declaring that map `<total>` you can be sure that
+you won't forget to add handlers for the new cases as you add new entries
+to the enum.
+
+```
+local degrees <total>: {Direction:number} = {
+   ["north"] = 0,
+   ["west"] = 90,
+   ["south"] = 180,
+   ["east"] = 270,
+}
+
+-- if you later update the `Direction` enum to add new directions
+-- such as "northeast" and "southwest", the above declaration of
+-- `degrees` will issue a compile-time error, because the table
+-- above is no longer total!
+```
+
+Another example of types that have a finite set of valid keys are records. By
+marking a record variable as `<total>`, you make it so it becomes mandatory to
+declare all its fields in the given initialization table.
+
+```
+local record Color
+   red: integer
+   green: integer
+   blue: integer
+end
+
+local teal_color <total>: Color = {
+   red = 0,
+   green = 128,
+   blue = 128,
+}
+
+-- if you later update the `Color` record to add a new component
+-- such as `alpha`, the above declaration of `teal_color`
+-- will issue a compile-time error, because the table above
+-- is no longer total!
+```
+
+Note however that the totality check refers only to the presence of
+explicit declarations: it will still accept an assignment to `nil`
+as a valid declaration. The rationale is that an explicit `nil` entry
+means that the programmer did consider that case, and chose to keep
+it empty. Therefore, something like this works:
+
+```
+local vertical_only <total>: {Direction:MotionCallback} = {
+   ["north"] = move_up,
+   ["west"] = nil,
+   ["south"] = move_down,
+   ["east"] = nil,
+}
+
+-- This declaration is fine: the map is still total, as we are
+-- explicitly mentioning which cases are left empty in it.
+```
+
+(Side note: the name "total" comes from the concept of a "total relation"
+in mathematics, which is a relation where, given a set of "keys" mapping
+to a set of "values", the keys fully cover the domain of their type).
 
 ## Global variables
 

@@ -1116,6 +1116,7 @@ local record Type
    labels: {string:{Node}}
    nominals: {string:{Type}}
    global_types: {string:boolean}
+   narrows: {string:boolean}
 end
 
 local record Operator
@@ -5614,7 +5615,8 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
    local lax = opts.lax
    local filename = opts.filename
 
-   local st: {{string:Variable}} = { env.globals }
+   local type Scope = {string:Variable}
+   local st: {Scope} = { env.globals }
 
    local symbol_list: {Symbol} = {}
    local symbol_list_n = 0
@@ -6206,43 +6208,65 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
       node.symbol_list_slot = symbol_list_n
    end
 
-   local function add_var(node: Node, var: string, valtype: Type, attribute?: Attribute, is_narrowing?: boolean, dont_check_redeclaration?: boolean): Variable
-      if lax and node and is_unknown(valtype) and (var ~= "self" and var ~= "...") and not is_narrowing then
-         add_unknown(node, var)
-      end
+   local get_unresolved: function(scope?: Scope): Type
+
+   local function add_to_scope(node: Node, name: string, t: Type, attribute: Attribute, is_narrowing: boolean, dont_check_redeclaration: boolean): Variable
       local scope <const> = st[#st]
-      local old_var <const> = scope[var]
-      if not attribute then
-         valtype = drop_constant_value(valtype)
-      end
-      if old_var and is_narrowing then
-         if not old_var.is_narrowed then
-            old_var.narrowed_from = old_var.t
-         end
-         old_var.is_narrowed = true
-         old_var.t = valtype
-      else
-         if not dont_check_redeclaration
-            and node
-            and not is_narrowing
-            and var ~= "self"
-            and var ~= "..."
-            and var:sub(1, 1) ~= "@"
-         then
-            check_if_redeclaration(var, node)
-         end
-         scope[var] = { t = valtype, attribute = attribute, is_narrowed = is_narrowing, declared_at = node }
-         if old_var then
-            -- the old var is removed from the scope and won't be checked when it closes,
-            -- so check it here
-            if not old_var.used then
-               unused_warning(var, old_var)
+      local var = scope[name]
+      if is_narrowing then
+         if var then
+            if var.is_narrowed then
+               var.t = t
+               return var
             end
+
+            var.is_narrowed = true
+            var.narrowed_from = var.t
+            var.t = t
+         else
+            var = { t = t, attribute = attribute, is_narrowed = true, declared_at = node }
+            scope[name] = var
          end
+
+         local unresolved = get_unresolved(scope)
+         unresolved.narrows[name] = true
+
+         return var
       end
 
-      if node and valtype.typename ~= "unresolved" and valtype.typename ~= "none" then
-         node.type = node.type or valtype
+      if not dont_check_redeclaration
+         and node
+         and name ~= "self"
+         and name ~= "..."
+         and name:sub(1, 1) ~= "@"
+      then
+         check_if_redeclaration(name, node)
+      end
+
+      if var and not var.used then
+         -- the old var is removed from the scope and won't be checked when it closes,
+         -- so check it here
+         unused_warning(name, var)
+      end
+
+      var = { t = t, attribute = attribute, is_narrowed = false, declared_at = node }
+      scope[name] = var
+
+      return var
+   end
+
+   local function add_var(node: Node, name: string, t: Type, attribute?: Attribute, is_narrowing?: boolean, dont_check_redeclaration?: boolean): Variable
+      if lax and node and is_unknown(t) and (name ~= "self" and name ~= "...") and not is_narrowing then
+         add_unknown(node, name)
+      end
+      if not attribute then
+         t = drop_constant_value(t)
+      end
+
+      local var = add_to_scope(node, name, t, attribute, is_narrowing, dont_check_redeclaration)
+
+      if node and t.typename ~= "unresolved" and t.typename ~= "none" then
+         node.type = node.type or t
          local slot: integer
          if node.symbol_list_slot then
             slot = node.symbol_list_slot
@@ -6250,10 +6274,10 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
             symbol_list_n = symbol_list_n + 1
             slot = symbol_list_n
          end
-         symbol_list[slot] = { y = node.y, x = node.x, name = var, typ = assert(scope[var].t) }
+         symbol_list[slot] = { y = node.y, x = node.x, name = name, typ = t }
       end
 
-      return scope[var]
+      return var
    end
 
    local type CompareTypes = function(Type, Type, ?boolean): boolean, {Error}
@@ -6432,20 +6456,23 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
       end
    end
 
-   local enum WhichScope
-      "top_scope"
-      "any_scope"
-   end
-   local function get_unresolved(where: WhichScope, node: Node): Type
+   get_unresolved = function(scope?: Scope): Type
       local unresolved: Type
-      if where == "top_scope" then
-         unresolved = st[#st]["@unresolved"] and st[#st]["@unresolved"].t
+      if scope then
+         local unr = scope["@unresolved"]
+         unresolved = unr and unr.t
       else
          unresolved = find_var_type("@unresolved")
       end
       if not unresolved then
-         unresolved = { typename = "unresolved", labels = {}, nominals = {}, global_types = {} }
-         add_var(node, "@unresolved", unresolved)
+         unresolved = {
+            typename = "unresolved",
+            labels = {},
+            nominals = {},
+            global_types = {},
+            narrows = {},
+         }
+         add_var(nil, "@unresolved", unresolved)
       end
       return unresolved
    end
@@ -6460,9 +6487,11 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
    end
 
    local function end_scope(node?: Node)
-      local unresolved = st[#st]["@unresolved"]
+      local scope = st[#st]
+      local unresolved = scope["@unresolved"]
       if unresolved then
-         local upper = st[#st - 1]["@unresolved"]
+         local next_scope = st[#st - 1]
+         local upper = next_scope["@unresolved"]
          if upper then
             for name, nodes in pairs(unresolved.t.labels) do
                for _, n in ipairs(nodes) do
@@ -6480,11 +6509,12 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
                upper.t.global_types[name] = true
             end
          else
-            st[#st - 1]["@unresolved"] = unresolved
+            next_scope["@unresolved"] = unresolved
+            unresolved.t.narrows = {}
          end
       end
-      close_types(st[#st])
-      check_for_unused_vars(st[#st])
+      close_types(scope)
+      check_for_unused_vars(scope)
       table.remove(st)
 
       if node then
@@ -6677,7 +6707,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
       if #t1.names == 1 and #t2.names == 1
          and t1.names[1] == t2.names[1]
       then
-         local unresolved = get_unresolved("any_scope", nil)
+         local unresolved = get_unresolved()
          if unresolved.global_types[t1.names[1]] then
             return true
          end
@@ -6773,6 +6803,10 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
       end
 
       if t1.typename == "emptytable" and is_lua_table_type(resolve_tuple_and_nominal(t2)) then
+         return true
+      end
+
+      if t2.typename == "emptytable" and is_lua_table_type(resolve_tuple_and_nominal(t1)) then
          return true
       end
 
@@ -7510,21 +7544,21 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
          end
 
          check_args_rets = function(where: Node, where_args: {Node}, f: Type, args: {Type}, rets: {Type}, argdelta: integer): Type, {Error}
-            local ok, errs: boolean, {Error}
-
-            ok, errs = check_func_type_list(where, where_args, args, f.args, argdelta, "argument")
-            if not ok then
-               return nil, errs
-            end
+            local rets_ok = true
+            local rets_errs: {Error}
+            local args_ok: boolean
+            local args_errs: {Error}
 
             if rets then
                rets = infer_at(where, rets)
                infer_emptytables(where, nil, rets, f.rets, 0)
 
-               ok, errs = check_func_type_list(where, nil, f.rets, rets, 0, "return")
-               if not ok then
-                  return nil, {}
-               end
+               rets_ok, rets_errs = check_func_type_list(where, nil, f.rets, rets, 0, "return")
+            end
+
+            args_ok, args_errs = check_func_type_list(where, where_args, args, f.args, argdelta, "argument")
+            if (not args_ok) or (not rets_ok) then
+               return nil, args_errs or {}
             end
 
             -- if we got to this point without returning,
@@ -7749,7 +7783,8 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
       end
    end
 
-   local function widen_in_scope(scope: {string:Variable}, var: string): boolean
+   local function widen_in_scope(scope: Scope, var: string): boolean
+      assert(scope[var], "no " .. var .. " in scope")
       if scope[var].is_narrowed then
          if scope[var].narrowed_from then
             scope[var].t = scope[var].narrowed_from
@@ -7758,16 +7793,18 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
          else
             scope[var] = nil
          end
+         local unresolved = get_unresolved(scope)
+         unresolved.narrows[var] = nil
          return true
       end
       return false
    end
 
-   local function widen_back_var(var: string): boolean
+   local function widen_back_var(name: string): boolean
       local widened = false
       for i = #st, 1, -1 do
-         if st[i][var] then
-            if widen_in_scope(st[i], var) then
+         if st[i][name] then
+            if widen_in_scope(st[i], name) then
                widened = true
             else
                break
@@ -7779,8 +7816,12 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
 
    local function widen_all_unions()
       for i = #st, 1, -1 do
-         for var, _ in pairs(st[i]) do
-            widen_in_scope(st[i], var)
+         local scope = st[i]
+         local unr = scope["@unresolved"]
+         if unr and unr.t.narrows then
+            for name, _ in pairs(unr.t.narrows) do
+               widen_in_scope(scope, name)
+            end
          end
       end
    end
@@ -8631,9 +8672,10 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
       end
    end
 
-   local function check_redeclared_key(node: Node, ctx: Node.ExpectedContext, seen_keys: {(string | number):Node}, ck: string, n: number)
-      local key: string | number = ck or n
-      if key then
+   local type CheckableKey = string | number | boolean
+
+   local function check_redeclared_key(node: Node, ctx: Node.ExpectedContext, seen_keys: {CheckableKey:Node}, key: CheckableKey)
+      if key ~= nil then
          local s = seen_keys[key]
          if s then
             node_error(node, in_context(ctx, "redeclared key " .. tostring(key) .. " (previously declared at " .. filename .. ":" .. s.y .. ":" .. s.x .. ")"))
@@ -8661,14 +8703,20 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
       local last_array_idx = 1
       local largest_array_idx = -1
 
-      local seen_keys: {(number | string):Node} = {}
+      local seen_keys: {CheckableKey:Node} = {}
 
       for i, child in ipairs(children) do
          assert(child.typename == "table_item")
 
          local ck = child.kname
          local n = node[i].key.constnum
-         check_redeclared_key(node[i], nil, seen_keys, ck, n)
+         local b: boolean = nil
+         if child.ktype.typename == "boolean" then
+            b = (node[i].key.tk == "true")
+         end
+
+         local key: CheckableKey = ck or n or b
+         check_redeclared_key(node[i], nil, seen_keys, key)
 
          local uvtype = resolve_tuple(child.vtype)
          if ck then
@@ -8797,7 +8845,9 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
       apply_facts(where, f)
    end
 
-   local function determine_declaration_type(name: string, node: Node, infertypes: {Type}, i: integer): Type, boolean
+   local function determine_declaration_type(var: Node, node: Node, infertypes: {Type}, i: integer): boolean, Type, boolean
+      local ok = true
+      local name = var.tk
       local infertype = infertypes and infertypes[i]
       if lax and infertype and infertype.typename == "nil" then
          infertype = nil
@@ -8810,11 +8860,12 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
          end
 
          if infertype then
-            assert_is_a(node.vars[i], infertype, decltype, context_name[node.kind], name)
+            ok = assert_is_a(node.vars[i], infertype, decltype, context_name[node.kind], name)
          end
       else
          if infertype and infertype.typename == "unresolvable_typearg" then
             node_error(node.vars[i], "cannot infer declaration type; an explicit type annotation is necessary")
+            ok = false
             infertype = INVALID
          end
       end
@@ -8828,7 +8879,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
       end
       t.inferred_len = nil
 
-      return t, infertype ~= nil
+      return ok, t, infertype ~= nil
    end
 
    local function get_type_declaration(node: Node): Type, Variable
@@ -8880,7 +8931,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
       ["global_type"] = {
          before = function(node: Node)
             local name = node.var.tk
-            local unresolved = get_unresolved("any_scope", node)
+            local unresolved = get_unresolved()
             if node.value then
                local resolved, aliasing = get_type_declaration(node)
                local added = add_global(node.var, name, resolved)
@@ -8928,7 +8979,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
                   end
                end
 
-               local t = determine_declaration_type(var.tk, node, infertypes, i)
+               local ok, t = determine_declaration_type(var, node, infertypes, i)
 
                if var.attribute == "close" then
                   if not type_is_closable(t) then
@@ -8941,6 +8992,16 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
                assert(var)
                add_var(var, var.tk, t, var.attribute, is_localizing_a_variable(node, i))
 
+               if ok and infertypes and infertypes[i] then
+                  local where = node.exps[i] or node.exps
+                  local infertype = infertypes[i]
+
+                  local rt = resolve_tuple_and_nominal(t)
+                  if rt.typename ~= "enum" and not same_type(t, infertype) then
+                     apply_facts(where, Fact { fact = "is", var = var.tk, typ = infertype, where = where })
+                  end
+               end
+
                dismiss_unresolved(var.tk)
             end
             node.type = NONE
@@ -8952,7 +9013,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
          after = function(node: Node, children: {Type}): Type
             local infertypes: {Type} = get_assignment_values(children[3], #node.vars)
             for i, var in ipairs(node.vars) do
-               local t, is_inferred = determine_declaration_type(var.tk, node, infertypes, i)
+               local _, t, is_inferred = determine_declaration_type(var, node, infertypes, i)
 
                if var.attribute == "close" then
                   node_error(var, "globals may not be <close>")
@@ -9096,7 +9157,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
       ["goto"] = {
          after = function(node: Node, _children: {Type}): Type
             if not find_var_type("::" .. node.label .. "::") then
-               local unresolved = get_unresolved("top_scope", node)
+               local unresolved = get_unresolved(st[#st])
                unresolved.labels[node.label] = unresolved.labels[node.label] or {}
                table.insert(unresolved.labels[node.label], node)
             end
@@ -9117,6 +9178,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
             begin_scope(node)
          end,
          before_statements = function(node: Node)
+            widen_all_unions()
             local exp1 = node.exps[1]
             local args = {
                typename = "tuple",
@@ -9194,6 +9256,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
       },
       ["fornum"] = {
          before_statements = function(node: Node, children: {Type})
+            widen_all_unions()
             begin_scope(node)
             local from_t = resolve_tuple_and_nominal(children[2])
             local to_t = resolve_tuple_and_nominal(children[3])
@@ -9346,14 +9409,18 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
 
                local force_array: Type = nil
 
-               local seen_keys: {(number | string):Node} = {}
+               local seen_keys: {CheckableKey:Node} = {}
 
                for i, child in ipairs(children) do
                   assert(child.typename == "table_item")
                   local cvtype = resolve_tuple(child.vtype)
                   local ck = child.kname
                   local n = node[i].key.constnum
-                  check_redeclared_key(node[i], node.expected_context, seen_keys, ck, n)
+                  local b: boolean = nil
+                  if child.ktype.typename == "boolean" then
+                     b = (node[i].key.tk == "true")
+                  end
+                  check_redeclared_key(node[i], node.expected_context, seen_keys, ck or n or b)
                   if is_record and ck then
                      local df = decltype.fields[ck]
                      if not df then
@@ -9428,6 +9495,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
       },
       ["local_function"] = {
          before = function(node: Node)
+            widen_all_unions()
             reserve_symbol_list_slot(node)
             begin_scope(node)
          end,
@@ -9453,6 +9521,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
       },
       ["global_function"] = {
          before = function(node: Node)
+            widen_all_unions()
             begin_scope(node)
             if node.implicit_global_function then
                local typ = find_var_type(node.name.tk)
@@ -9490,6 +9559,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
       },
       ["record_function"] = {
          before = function(node: Node)
+            widen_all_unions()
             begin_scope(node)
          end,
          before_statements = function(node: Node, children: {Type})
@@ -9559,6 +9629,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
       },
       ["function"] = {
          before = function(node: Node)
+            widen_all_unions()
             begin_scope(node)
          end,
          before_statements = function(node: Node)
@@ -9618,6 +9689,9 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
             elseif node.op.op == "@funcall" then
                if node.e1.type.typename == "function" then
                   local argdelta = (node.e1.op and node.e1.op.op == ":") and -1 or 0
+                  if node.expected then
+                     is_a(node.e1.type.rets, node.expected)
+                  end
                   for i, typ in ipairs(node.e1.type.args) do
                      if node.e2[i + argdelta] then
                         node.e2[i + argdelta].expected = typ
@@ -9640,6 +9714,8 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
             local orig_b = b
             local ra = a and resolve_tuple_and_nominal(a)
             local rb = b and resolve_tuple_and_nominal(b)
+
+            local expected = node.expected and resolve_tuple_and_nominal(node.expected)
 
             if ra.typename == "circular_require" or (ra.def and ra.def.typename == "circular_require") then
                node_error(node, "cannot dereference a type from a circular require")
@@ -9734,7 +9810,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
                     or  (ra.typename == "string" and rb.typename == "enum" and is_a(ra, rb))) then
                node.known = nil
                node.type = (ra.typename == "enum" and ra or rb)
-            elseif node.op.op == "or" and node.expected and node.expected.typename == "union" then
+            elseif node.op.op == "or" and expected and expected.typename == "union" then
                -- must be checked after string/enum above
                node.known = facts_or(node, node.e1.known, node.e2.known)
                local u = unite({ra, rb}, true)
@@ -9744,9 +9820,9 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
                node.type = u
             elseif node.op.op == "or" and is_a(rb, ra) then
                node.known = facts_or(node, node.e1.known, node.e2.known)
-               if node.expected then
-                  local a_is = is_a(ra, node.expected)
-                  local b_is = is_a(rb, node.expected)
+               if expected then
+                  local a_is = is_a(a, node.expected)
+                  local b_is = is_a(b, node.expected)
                   if a_is and b_is then
                      node.type = node.expected
                   elseif a_is then
@@ -10103,7 +10179,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
                   end
                else
                   local name = typ.names[1]
-                  local unresolved = get_unresolved("any_scope", nil)
+                  local unresolved = get_unresolved()
                   unresolved.nominals[name] = unresolved.nominals[name] or {}
                   table.insert(unresolved.nominals[name], typ)
                end
