@@ -729,12 +729,12 @@ for i, name in ipairs({"records", "arrayrecords"}) do
 end
 
 describe("embedding", function()
-   it("embed is not a reserved word", util.check [[
+   it("embed is not a reserved word", util.check([[
       local record A
          embed: number
       end
-   ]])
-   it("should make members of a record available to another", util.check [[
+   ]]))
+   it("should make members of a record available to another", util.check([[
       local record A
          userdata
          a_value: number
@@ -755,9 +755,9 @@ describe("embedding", function()
       f(c, c)
       local a: A = b
       a = c
-   ]])
+   ]]))
 
-   it("embed multiple records", util.check [[
+   it("embed multiple records", util.check([[
       local record A
          x: number
       end
@@ -773,8 +773,8 @@ describe("embedding", function()
       print(c.x, c.y, c.z)
       local function f(a: A, b: B, c: C) end
       f(c, c, c)
-   ]])
-   it("share the same element type with embeded arrayrecord", util.check [[
+   ]]))
+   it("share the same element type with embeded arrayrecord", util.check([[
       local record A
          { string }
          x: number
@@ -793,15 +793,15 @@ describe("embedding", function()
       local strs: {string} = c
       local b: B = c
       strs = b
-   ]])
+   ]]))
 end)
 
 describe("const field", function()
-   it("const is not a reserved word", util.check [[
+   it("const is not a reserved word", util.check([[
       local record A
          const: boolean
       end
-   ]])
+   ]]))
    it("cannot assign to a const field", util.check_type_error([[
       local record A
          const ["a field"]: string
@@ -835,12 +835,27 @@ describe("const field", function()
       { y = 10, msg = "cannot assign to const field \"b\"" },
       { y = 10, msg = "in assignment: got string \"3\", expected number" }
    }))
-   it("it is OK to modify const field with rawset", util.check [[
+   it("it is OK to modify const field with rawset", util.check([[
       local record R
          const x: boolean
       end
       local r: R = { x = true }
       rawset(r, "x", false)
-   ]])
+   ]]))
 end)
 
+describe("arrayrecord", function()
+   it("assigning to array produces no warnings", util.check_warnings([[
+      local record R1
+         {string}
+
+         x: number
+      end
+
+      local v: R1 = { x = 10 }
+      v[1] = "hello"
+
+      local a: {string} = v
+      print(a)
+   ]], {}))
+end)

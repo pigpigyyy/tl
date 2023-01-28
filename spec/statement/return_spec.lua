@@ -48,7 +48,7 @@ describe("return", function()
          { y = 2, x = 58, msg = "in return value: got <any type>, expected string" }
       }))
 
-      it("expands tuples but not nominals (regression test for #249)", util.check [[
+      it("expands tuples but not nominals (regression test for #249)", util.check([[
          local type A = number
          local type B = record
            h: unionAorB
@@ -63,9 +63,9 @@ describe("return", function()
              assert(false, 'head of A; ' .. n as A)
            end
          end
-      ]])
+      ]]))
 
-      it("flow expected type into return expressions (regression test for #553)", util.check [[
+      it("flow expected type into return expressions (regression test for #553)", util.check([[
          local enum Type
             "add"
             "change"
@@ -77,17 +77,17 @@ describe("return", function()
                    b == 0 and "add"    or
                               "change"
          end
-      ]])
+      ]]))
    end)
 
    describe("module is inferred", function()
-      it("from first use (#334)", util.check [[
+      it("from first use (#334)", util.check([[
          if math.random(2) then
             return "hello"
          else
             return "world"
          end
-      ]])
+      ]]))
 
       it("detects mismatches (#334)", util.check_type_error([[
          if math.random(2) then

@@ -63,6 +63,12 @@ describe("warnings", function()
          print(_)
       ]], { }))
 
+      it("reports unused union narrowed in declaration", util.check_warnings([[
+         local s: string | number = 12
+      ]], {
+         { y = 1, msg = "unused variable s" },
+      }))
+
       it("does not report unused global variables", util.check_warnings([[
          global foo = "bar"
       ]], { }))

@@ -8,7 +8,7 @@ end
 
 
 describe("singlequote string", function()
-   it("accepts", util.check [[local foo = 'bar']])
+   it("accepts", util.check([[local foo = 'bar']]))
 
    it("export Lua", function()
       local result = tl.process_string([[local foo = 'bar']])
