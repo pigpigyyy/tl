@@ -1722,14 +1722,14 @@ local simple_types: {string:Type} = {
 }
 
 local simple_opt_types: {string:Type} = {
-	["nil"] = a_type { opt = true, typename = "nil" },
-	["any"] = a_type { opt = true, typename = "any" },
-	["table"] = a_type { opt = true, typename = "map", keys = ANY, values = ANY },
-	["number"] = a_type { opt = true, typename = "number" },
-	["string"] = a_type { opt = true, typename = "string" },
-	["thread"] = a_type { opt = true, typename = "thread" },
-	["boolean"] = a_type { opt = true, typename = "boolean" },
-	["integer"] = a_type { opt = true, typename = "integer" },
+   ["nil"] = a_type { opt = true, typename = "nil" },
+   ["any"] = a_type { opt = true, typename = "any" },
+   ["table"] = a_type { opt = true, typename = "map", keys = ANY, values = ANY },
+   ["number"] = a_type { opt = true, typename = "number" },
+   ["string"] = a_type { opt = true, typename = "string" },
+   ["thread"] = a_type { opt = true, typename = "thread" },
+   ["boolean"] = a_type { opt = true, typename = "boolean" },
+   ["integer"] = a_type { opt = true, typename = "integer" },
 }
 
 local function parse_base_type(ps: ParseState, i: integer): integer, Type
@@ -6557,9 +6557,9 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
       return node.type
    end
 
-   local function are_disjoint(rec1: Type, rec2: Type): boolean, {string:boolean}
+   local function are_disjoint(rec1: Type, rec2: Type): boolean, {string: boolean}
       local disjoint = true
-      local shared_fields: {string:boolean} = {}
+      local shared_fields: {string: boolean} = {}
       for field, t in pairs(rec1.fields) do
          if rec2.fields[field] and rec2.fields[field] ~= t then
             shared_fields[field] = true
@@ -6579,14 +6579,27 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
       assert(is_record_type(t1), "only records can have embeds")
       if is_record_type(t2) then
          local compat, fields = are_disjoint(t1, t2)
-         if compat then
-            return compat
-         else
+         local errs: {string} = {}
+         if not compat then
             local str: {string} = {}
             for f in pairs(fields) do
                table.insert(str, f)
             end
-            return nil, "records share fields: " .. table.concat(str, ", ")
+            errs[#errs + 1] = "share fields: " .. table.concat(str, ", ")
+         end
+         if t1.meta_fields and t2.meta_fields then
+            local meta_fields: {string} = {}
+            for field_name in pairs(t1.meta_fields) do
+               if t2.meta_fields[field_name] then
+                  meta_fields[#meta_fields + 1] = field_name
+               end
+            end
+            errs[#errs + 1] = "share meta fields: " .. table.concat(meta_fields, ", ")
+         end
+         if #errs == 0 then
+            return true
+         else
+            return false, table.concat(errs, " and ")
          end
       end
       return false, t2.typename .. " can't be embedded"
@@ -6617,10 +6630,24 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
          end
          t.embeds[i] = e
          if e.fields then
-            for fname, f in pairs(e.fields) do
-               t.fields[fname] = f
-               table.insert(t.field_order, fname)
+            local fields = t.fields or {}
+            local field_order = t.field_order or {}
+            for _, fname in ipairs(e.field_order) do
+               fields[fname] = e.fields[fname]
+               field_order[#field_order + 1] = fname
             end
+            t.fields = fields
+            t.field_order = field_order
+         end
+         if e.meta_fields then
+            local meta_fields = t.meta_fields or {}
+            local meta_field_order = t.meta_field_order or {}
+            for _, fname in ipairs(e.meta_field_order) do
+               meta_fields[fname] = e.meta_fields[fname]
+               meta_field_order[#meta_field_order + 1] = fname
+            end
+            t.meta_fields = meta_fields
+            t.meta_field_order = meta_field_order
          end
          if e.readonlys then
             if not t.readonlys then
@@ -6654,7 +6681,6 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
             type_error(t, "spurious type arguments")
             return nil
          elseif def.typeargs then
-				error("here")
             type_error(t, "missing type arguments in %s", def)
             return nil
          else
@@ -6717,7 +6743,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
       local embeds = t1.embeds
       if embeds and #embeds > 0 then
          for i = 1, #embeds do
-            if is_a(embeds[i], t2) then
+            if same_type(embeds[i], t2) then
                return true
             elseif embeds[i].embeds then
                return is_embedded(embeds[i], t2)
@@ -10606,11 +10632,13 @@ function tl.get_types(result: Result, trenv: TypeReportEnv): TypeReport, TypeRep
       typeid_to_num[t.typeid] = n
       trenv.next_num = trenv.next_num + 1
 
-      if t.found then
-         ti.ref = get_typenum(t.found)
-      end
       if t.resolved then
          rt = t
+      end
+      if rt.found then
+         ti.ref = get_typenum(rt.found)
+      elseif rt.is_alias then
+         ti.ref = get_typenum(rt.def)
       end
       assert(not is_typetype(rt))
 
@@ -10956,21 +10984,21 @@ tl.load = function(input: string, chunkname: string, mode: LoadMode, ...: {any:a
       return nil, (chunkname or "") .. ":" .. errs[1].y .. ":" .. errs[1].x .. ": " .. errs[1].msg
    end
 
-	local function env_for(lax: boolean, env_tbl: {any:any}): Env
-		if not env_tbl then
-			if not tl.package_loader_env then
-				tl.package_loader_env = tl.init_env(lax)
-			end
-			return tl.package_loader_env
-		end
+   local function env_for(lax: boolean, env_tbl: {any:any}): Env
+      if not env_tbl then
+         if not tl.package_loader_env then
+            tl.package_loader_env = tl.init_env(lax)
+         end
+         return tl.package_loader_env
+      end
 
-		if not tl.load_envs then
-			tl.load_envs = setmetatable({}, { __mode = "k" })
-		end
+      if not tl.load_envs then
+         tl.load_envs = setmetatable({}, { __mode = "k" })
+      end
 
-		tl.load_envs[env_tbl] = tl.load_envs[env_tbl] or tl.init_env(lax)
-		return tl.load_envs[env_tbl]
-	end
+      tl.load_envs[env_tbl] = tl.load_envs[env_tbl] or tl.init_env(lax)
+      return tl.load_envs[env_tbl]
+   end
 
    local lax = chunkname and not not chunkname:match("lua$")
    if not tl.package_loader_env then
