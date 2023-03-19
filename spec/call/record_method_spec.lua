@@ -80,4 +80,77 @@ describe("record method call", function()
       { y = 9, msg = "invoked method as a regular function: use ':' instead of '.'" },
    }))
 
+   it("reports potentially wrong use of self. in call", util.check_warnings([[
+      local record Foo
+         x: integer
+      end
+      function Foo:copy_x(other: Foo)
+         self.x = other.x
+      end
+      function Foo:copy_all(other: Foo)
+         self.copy_x(other)
+      end
+   ]], {
+      { y = 8, msg = "invoked method as a regular function: consider using ':' instead of '.'" }
+   }))
+
+   it("accepts use of dot call for method on record typetype", util.check_warnings([[
+      local record Foo
+         x: integer
+      end
+      function Foo:add(other: Foo)
+         self.x = other and (self.x + other.x) or self.x
+      end
+      local first: Foo = {}
+      Foo.add(first)
+      local q = Foo
+      q.add(first)
+      local m = {
+         a: Foo
+      }
+      m.a.add(first)
+   ]], {}, {}))
+
+   it("reports correct errors for calls on aliases of method", util.check_type_error([[
+      local record Foo
+         x: integer
+      end
+      function Foo:add(other?: integer)
+         self.x = other and (self.x + other) or self.x
+      end
+      local first: Foo = {}
+      local fadd = first.add
+      fadd(12)
+      global gadd = first.add
+      gadd(13)
+      local tab = {
+         hadd = first.add
+      }
+      tab.hadd(14)
+
+   ]],
+   {
+      { y = 9, msg = "argument 1: got integer, expected Foo" },
+      { y = 11, msg = "argument 1: got integer, expected Foo" },
+      { y = 15, msg = "argument 1: got integer, expected Foo" },
+   }))
+
+   it("reports no warnings for correctly-typed calls on aliases of method", util.check_warnings([[
+      local record Foo
+         x: integer
+      end
+      function Foo:add(other?: Foo)
+         self.x = other and (self.x + other.x) or self.x
+      end
+      local first: Foo = {}
+      local fadd = first.add
+      fadd(first)
+      global gadd = first.add
+      gadd(first)
+      local tab = {
+         hadd = first.add
+      }
+      tab.hadd(first)
+
+   ]], {}, {}))
 end)
