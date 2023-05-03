@@ -1293,7 +1293,6 @@ local record Node
 
    fn_owner: Node
    is_method: boolean
-   is_method_hint: boolean
 
    exp: Node
    if_parent: Node
@@ -2466,8 +2465,6 @@ local function parse_function(ps: ParseState, i: integer, ft: FunctionType): int
    i = parse_function_args_rets_body(ps, i, fn)
    if fn.is_method then
       table.insert(fn.args, 1, { x = selfx, y = selfy, tk = "self", kind = "identifier", is_self = true })
-   elseif fn.args[1] and fn.args[1].tk == "self" then
-      fn.is_method_hint = false
    end
 
    if not fn.name then
