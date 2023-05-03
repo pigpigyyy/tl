@@ -1105,12 +1105,14 @@ local record Type
 
    -- function
    is_method: boolean
-   is_method_hint: boolean
    min_arity: number
    args: Type
    rets: Type
 
    typeid: integer
+
+   -- function argument
+   is_self: boolean
 
    -- nominal
    names: {string}
@@ -1376,9 +1378,9 @@ local parse_statements: function(ParseState, integer, ?boolean): integer, Node
 local parse_argument_list: function(ParseState, integer): integer, Node
 local parse_argument_type_list: function(ParseState, integer): integer, Type
 local parse_type: function(ParseState, integer): integer, Type, nil
-local parse_newtype: function(ps: ParseState, i: integer): integer, Node
+local parse_newtype: function(ps: ParseState, i: integer, name: string): integer, Node
 local parse_enum_body: function(ps: ParseState, i: integer, def: Type, node: Node): integer, Node
-local parse_record_body: function(ps: ParseState, i: integer, def: Type, node: Node): integer, Node
+local parse_record_body: function(ps: ParseState, i: integer, def: Type, node: Node, name?: string): integer, Node
 
 local function fail(ps: ParseState, i: integer, msg: string): integer
    if not ps.tokens[i] then
@@ -1443,15 +1445,13 @@ local function new_type(ps: ParseState, i: integer, typename: TypeName): Type
    }
 end
 
--- Makes a shallow copy of the given type with a new typeid
+-- Makes a shallow copy of the given type
 local function shallow_copy_type(t: Type): Type
    local copy: {any:any} = {}
    for k, v in pairs(t as {any:any}) do
       copy[k] = v
    end
-   local typ: Type = copy as Type
-   typ.typeid = new_typeid()
-   return typ
+   return copy as Type
 end
 
 local function verify_kind(ps: ParseState, i: integer, kind: TokenKind, node_kind?: NodeKind): integer, Node
@@ -1705,14 +1705,14 @@ local function parse_function_type(ps: ParseState, i: integer): integer, Type
       i, typ.typeargs = parse_anglebracket_list(ps, i, parse_typearg)
    end
    if ps.tokens[i].tk == "(" then
-      if ps.tokens[i + 1].tk == "self" then
-         typ.is_method_hint = true
-      end
       i, typ.args = parse_argument_type_list(ps, i)
       i, typ.rets = parse_return_types(ps, i)
    else
       typ.args = a_type { typename = "tuple", is_va = true, a_type { typename = "any" } }
       typ.rets = a_type { typename = "tuple", is_va = true, a_type { typename = "any" } }
+   end
+   if typ.args[1] and typ.args[1].is_self then
+      typ.is_method = true
    end
    return i, typ
 end
@@ -2361,13 +2361,15 @@ parse_argument_list = function(ps: ParseState, i: integer): integer, Node
    return i, node
 end
 
-local function parse_argument_type(ps: ParseState, i: integer): integer, Type, nil
+local function parse_argument_type(ps: ParseState, i: integer): integer, Type, integer
    local is_va = false
+   local argument_name: string = nil
    local opt = false
    if ps.tokens[i].kind == "identifier" then
       if ps.tokens[i + 1].tk == "?" then
          opt = true
          if ps.tokens[i + 2].tk == ":" then
+            argument_name = ps.tokens[i].tk
             i = i + 3
          end
       elseif ps.tokens[i + 1].tk == ":" then
@@ -2392,7 +2394,11 @@ local function parse_argument_type(ps: ParseState, i: integer): integer, Type, n
       typ.is_va = is_va
    end
 
-   return i, typ
+   if argument_name == "self" then
+      typ.is_self = true
+   end
+
+   return i, typ, 0
 end
 
 parse_argument_type_list = function(ps: ParseState, i: integer): integer, Type
@@ -2459,7 +2465,7 @@ local function parse_function(ps: ParseState, i: integer, ft: FunctionType): int
    local selfx, selfy = ps.tokens[i].x, ps.tokens[i].y
    i = parse_function_args_rets_body(ps, i, fn)
    if fn.is_method then
-      table.insert(fn.args, 1, { x = selfx, y = selfy, tk = "self", kind = "identifier" })
+      table.insert(fn.args, 1, { x = selfx, y = selfy, tk = "self", kind = "identifier", is_self = true })
    elseif fn.args[1] and fn.args[1].tk == "self" then
       fn.is_method_hint = false
    end
@@ -2670,7 +2676,7 @@ local function store_field_in_record(ps: ParseState, i: integer, field_name: str
    return true
 end
 
-local type ParseBody = function(ps: ParseState, i: integer, def: Type, node: Node): integer, Node
+local type ParseBody = function(ps: ParseState, i: integer, def: Type, node: Node, name: string): integer, Node
 
 local function parse_nested_type(ps: ParseState, i: integer, def: Type, typename: TypeName, parse_body: ParseBody): integer, boolean
    i = i + 1 -- skip 'record' or 'enum'
@@ -2685,7 +2691,7 @@ local function parse_nested_type(ps: ParseState, i: integer, def: Type, typename
    local nt: Node = new_node(ps.tokens, i - 2, "newtype")
    nt.newtype = new_type(ps, i, "typetype")
    local rdef = new_type(ps, i, typename)
-   local iok = parse_body(ps, i, rdef, nt)
+   local iok = parse_body(ps, i, rdef, nt, v.tk)
    if iok then
       i = iok
       nt.newtype.def = rdef
@@ -2739,7 +2745,7 @@ local metamethod_names: {string:boolean} = {
    ["__close"] = true,
 }
 
-parse_record_body = function(ps: ParseState, i: integer, def: Type, node: Node): integer, Node
+parse_record_body = function(ps: ParseState, i: integer, def: Type, node: Node, name?: string): integer, Node
    local istart = i - 1
    def.fields = {}
    def.field_order = {}
@@ -2779,7 +2785,7 @@ parse_record_body = function(ps: ParseState, i: integer, def: Type, node: Node):
          end
          i = verify_tk(ps, i, "=")
          local nt: Node
-         i, nt = parse_newtype(ps, i)
+         i, nt = parse_newtype(ps, i, v.tk)
          if not nt or not nt.newtype then
             return fail(ps, i, "expected a type definition")
          end
@@ -2848,8 +2854,24 @@ parse_record_body = function(ps: ParseState, i: integer, def: Type, node: Node):
                if not metamethod_names[field_name] then
                   fail(ps, i - 1, "not a valid metamethod: " .. field_name)
                end
-               t.is_method_hint = nil
             end
+
+            if t.is_method and t.args and t.args[1] and t.args[1].is_self then
+               local selfarg = t.args[1]
+               if selfarg.tk ~= name or (def.typeargs and not selfarg.typevals) then
+                  t.is_method = false
+                  selfarg.is_self = false
+               elseif def.typeargs then
+                  for j=1,#def.typeargs do
+                     if (not selfarg.typevals[j]) or selfarg.typevals[j].tk ~= def.typeargs[j].typearg then
+                        t.is_method = false
+                        selfarg.is_self = false
+                        break
+                     end
+                  end
+               end
+            end
+
             if is_const then
                if not def.readonlys then
                   def.readonlys = {}
@@ -2875,13 +2897,13 @@ parse_record_body = function(ps: ParseState, i: integer, def: Type, node: Node):
    return i, node
 end
 
-parse_newtype = function(ps: ParseState, i: integer): integer, Node
+parse_newtype = function(ps: ParseState, i: integer, name: string): integer, Node
    local node: Node = new_node(ps.tokens, i, "newtype")
    node.newtype = new_type(ps, i, "typetype")
    if ps.tokens[i].tk == "record" then
       local def = new_type(ps, i, "record")
       i = i + 1
-      i = parse_record_body(ps, i, def, node)
+      i = parse_record_body(ps, i, def, node, name)
       node.newtype.def = def
       return i, node
    elseif ps.tokens[i].tk == "enum" then
@@ -3027,7 +3049,7 @@ local function parse_type_declaration(ps: ParseState, i: integer, node_name: Nod
       return i, asgn
    end
 
-   i, asgn.value = parse_newtype(ps, i)
+   i, asgn.value = parse_newtype(ps, i, asgn.var.tk)
    if not asgn.value then
       return i
    end
@@ -3054,7 +3076,7 @@ local function parse_type_constructor(ps: ParseState, i: integer, node_name: Nod
    end
    nt.newtype.def.names = { asgn.var.tk }
 
-   i = parse_body(ps, i, def, nt)
+   i = parse_body(ps, i, def, nt, asgn.var.tk)
    return i, asgn
 end
 
@@ -3324,7 +3346,7 @@ local function recurse_type<T>(ast: Type, visit: Visitor<TypeName, Type, T>): T
    end
    if ast.args then
       for i, child in ipairs(ast.args) do
-         if i > 1 or not ast.is_method then
+         if i > 1 or not ast.is_method or child.is_self then
             table.insert(xs, recurse_type(child, visit))
          end
       end
@@ -6014,7 +6036,6 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
             end
 
             copy.is_method = t.is_method
-            copy.is_method_hint = t.is_method_hint
             copy.min_arity = t.min_arity
             copy.args, same = resolve(t.args, same)
             copy.rets, same = resolve(t.rets, same)
@@ -6221,17 +6242,9 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
       return typ
    end
 
-   local function shallow_copy(t: Type): Type
-      local copy = {}
-      for k, v in pairs(t as {any:any}) do
-         copy[k] = v
-      end
-      return copy as Type
-   end
-
    local function infer_at(where: Node, t: Type): Type
       local ret = resolve_typevars_at(where, t)
-      ret = (ret ~= t) and ret or shallow_copy(t)
+      ret = (ret ~= t) and ret or shallow_copy_type(t)
       ret.inferred_at = where
       ret.inferred_at_file = filename
       return ret
@@ -6241,7 +6254,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
       if not t.tk then
          return t
       end
-      local ret = shallow_copy(t)
+      local ret = shallow_copy_type(t)
       ret.tk = nil
       return ret
    end
@@ -7730,7 +7743,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
             for i = 1, n do
                if (not tried) or not tried[i] then
                   local f = is_func and func or func.types[i]
-                  if (f.is_method or f.is_method_hint) and not is_method then
+                  if f.is_method and not is_method then
                      if args[1] and is_a(args[1], f.args[1]) then
                         local receiver_is_typetype = where.e1.e1 and where.e1.e1.type and where.e1.e1.type.resolved and where.e1.e1.type.resolved.typename == "typetype"
                         if not receiver_is_typetype then
@@ -8294,7 +8307,8 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
             return nil, nil, dname
          end
          t = t and t.fields and t.fields[fname]
-         return t, v, dname
+
+         return t.def or t, v, dname
       end
    end
 
@@ -9032,6 +9046,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
          elseif infertype and infertype.is_method then
             -- If we assign a method to a variable, e.g local myfunc = myobj.dothing, the variable should not be treated as a method
             infertype = shallow_copy_type(infertype)
+            infertype.typeid = new_typeid()
             infertype.is_method = false
          end
       end
@@ -9747,6 +9762,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
             if vtype.is_method then
                -- If we assign a method to a table item, e.g local a = { myfunc = myobj.dothing }, the table item should not be treated as a method
                vtype = shallow_copy_type(vtype)
+               vtype.typeid = new_typeid()
                vtype.is_method = false
             end
             node.type = a_type {
@@ -9863,7 +9879,6 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
                x = node.x,
                typename = "function",
                is_method = node.is_method,
-               is_method_hint = node.is_method_hint,
                typeargs = node.typeargs,
                args = children[3],
                rets = get_rets(children[4]),
