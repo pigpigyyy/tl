@@ -271,7 +271,7 @@ describe("record method call", function()
          end
          local record Foo
             x: integer
-            add: function(self: Bar, other: Bar)
+            add: function(self: Bar, other?: Bar)
          end
          local first: Foo = {}
          local second: Bar = {}
@@ -281,7 +281,7 @@ describe("record method call", function()
       it("for function declared in method body with self as different generic type from receiver", util.check_warnings([[
          local record Foo<T>
             x: T
-            add: function(self: Foo<integer>, other: Foo<integer>)
+            add: function(self: Foo<integer>, other?: Foo<integer>)
          end
          local first: Foo<string> = {}
          local second: Foo<integer> = {}
@@ -292,7 +292,7 @@ describe("record method call", function()
          local record Foo
             x: integer
          end
-         function Foo:add(other: Foo)
+         function Foo:add(other?: Foo)
             self.x = other and (self.x + other.x) or self.x
          end
          local first: Foo = {}
@@ -315,7 +315,7 @@ describe("record method call", function()
          local record Foo
             x: integer
          end
-         function Foo:add(other: integer)
+         function Foo:add(other?: integer)
             self.x = other and (self.x + other) or self.x
          end
          local first: Foo = {}
@@ -340,7 +340,7 @@ describe("record method call", function()
          end
          local record Foo
             x: integer
-            add: function(self: Bar, other: Bar)
+            add: function(self: Bar, other?: Bar)
          end
          local first: Foo = {}
          first.add(first)
@@ -352,7 +352,7 @@ describe("record method call", function()
       it("for function declared in method body with self as different generic type from receiver", util.check_type_error([[
          local record Foo<T>
             x: T
-            add: function(self: Foo<integer>, other: Foo<integer>)
+            add: function(self: Foo<integer>, other?: Foo<integer>)
          end
          local first: Foo<string> = {}
          first.add(first)

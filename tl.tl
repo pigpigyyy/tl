@@ -1,5 +1,5 @@
 
-local VERSION = "0.15.1+dora"
+local VERSION = "0.15.2+dora"
 
 local record tl
    enum LoadMode
@@ -2365,10 +2365,10 @@ local function parse_argument_type(ps: ParseState, i: integer): integer, Type, i
    local argument_name: string = nil
    local opt = false
    if ps.tokens[i].kind == "identifier" then
+      argument_name = ps.tokens[i].tk
       if ps.tokens[i + 1].tk == "?" then
          opt = true
          if ps.tokens[i + 2].tk == ":" then
-            argument_name = ps.tokens[i].tk
             i = i + 3
          end
       elseif ps.tokens[i + 1].tk == ":" then
@@ -7977,7 +7977,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
 
       if existing then
          if is_assigning and existing_attr then
-            node_error(node, "cannot reassign to <" .. node.attribute .. "> global: " .. var)
+            node_error(node, "cannot reassign to <" .. existing_attr .. "> global: " .. var)
          end
          if existing_attr and not is_const then
             node_error(node, "global was previously declared as <" .. existing_attr .. ">: " .. var)

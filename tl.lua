@@ -1,5 +1,5 @@
 local _tl_compat; if (tonumber((_VERSION or ''):match('[%d.]*$')) or 0) < 5.3 then local p, m = pcall(require, 'compat53.module'); if p then _tl_compat = m end end; local assert = _tl_compat and _tl_compat.assert or assert; local io = _tl_compat and _tl_compat.io or io; local ipairs = _tl_compat and _tl_compat.ipairs or ipairs; local load = _tl_compat and _tl_compat.load or load; local math = _tl_compat and _tl_compat.math or math; local os = _tl_compat and _tl_compat.os or os; local package = _tl_compat and _tl_compat.package or package; local pairs = _tl_compat and _tl_compat.pairs or pairs; local string = _tl_compat and _tl_compat.string or string; local table = _tl_compat and _tl_compat.table or table; local _tl_table_unpack = unpack or table.unpack
-local VERSION = "0.15.1+dora"
+local VERSION = "0.15.2+dora"
 
 local tl = {TypeCheckOptions = {}, Env = {}, Symbol = {}, Result = {}, Error = {}, TypeInfo = {}, TypeReport = {}, TypeReportEnv = {}, }
 
@@ -2365,10 +2365,10 @@ local function parse_argument_type(ps, i)
    local argument_name = nil
    local opt = false
    if ps.tokens[i].kind == "identifier" then
+      argument_name = ps.tokens[i].tk
       if ps.tokens[i + 1].tk == "?" then
          opt = true
          if ps.tokens[i + 2].tk == ":" then
-            argument_name = ps.tokens[i].tk
             i = i + 3
          end
       elseif ps.tokens[i + 1].tk == ":" then
@@ -7977,7 +7977,7 @@ tl.type_check = function(ast, opts)
 
       if existing then
          if is_assigning and existing_attr then
-            node_error(node, "cannot reassign to <" .. node.attribute .. "> global: " .. var)
+            node_error(node, "cannot reassign to <" .. existing_attr .. "> global: " .. var)
          end
          if existing_attr and not is_const then
             node_error(node, "global was previously declared as <" .. existing_attr .. ">: " .. var)
