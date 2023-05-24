@@ -23,7 +23,7 @@ return {
 | `-l --require`  | | `{string}` | `run` | Require a module prior to executing the script. This is similar in behavior to the `-l` flag in the Lua interpreter. |
 | `-I --include-dir` |  `include_dir` | `{string}` | `build` `check` `gen` `run` | Prepend this directory to the module search path.
 | `--gen-compat` | `gen_compat` | `string` | `build` `gen` `run` | Generate compatibility code for targeting different Lua VM versions. See [below](#generated-code) for details.
-| `--gen-target` | `gen_target` | `string` | `build` `gen` `run` | Minimum targeted Lua version for generated code. Options are `5.1` and `5.3`. See [below](#generated-code) for details.
+| `--gen-target` | `gen_target` | `string` | `build` `gen` `run` | Minimum targeted Lua version for generated code. Options are `5.1`, `5.3` and `5.4`. See [below](#generated-code) for details.
 || `include` | `{string}` | `build` | The set of files to compile/check. See below for details on patterns.
 || `exclude` | `{string}` | `build` | The set of files to exclude. See below for details on patterns.
 | `-s --source-dir` | `source_dir` | `string` | `build` | Set the directory to be searched for files. `build` will compile every .tl file in every subdirectory by default.
@@ -60,9 +60,39 @@ library for bitwise operators.
 
 Using `5.3`, Teal will generate code using the native `//` and bitwise operators.
 
+The option `5.4` is equivalent to `5.3`, but it also allows using the `<close>`
+variable annotation. Since that is incompatible with other Lua versions, using
+this option requires using `--gen-compat=off`.
+
 Code generated with `--gen-target=5.1` will still run on Lua 5.3+, but not
 optimally: the native Lua 5.3+ operators have better performance and better
-precision.
+precision. For example, if you are targeting Lua 5.1, the Teal code `x // y`
+will generate `math.floor(x / y)` instead.
+
+If you do not use these options, the Teal compiler will infer a default
+target implicitly.
+
+#### Which Lua version does the Teal compiler target by default?
+
+If set explicitly via the `--gen-target` flag of the `tl` CLI (or the equivalent
+options in the programmatic API), the generated code will target the Lua
+version requested: 5.1, 5.3 or 5.4.
+
+If the code generation target is not set explicitly via `--gen-target`, Teal
+will target the Lua version most compatible with the version of the Lua VM
+under which the compiler itself is running. For example, if running under
+something that reports `_VERSION` as `"Lua 5.1"` or `"Lua 5.2"` (such as LuaJIT),
+it will generate 5.1-compatible code. If running under Lua 5.3 or greater, it
+will output code that uses 5.3 extensions.
+
+The stand-alone `tl` binaries are built using Lua 5.4, so they default to
+generating 5.3-compatible code. If you install `tl` using LuaRocks, the CLI
+will use the Lua version you use with LuaRocks, so it will default to that
+Lua's version.
+
+If you require the `tl` Lua module and use the `tl.loader()`, it will do the
+implicit version selection, picking the right choice based on the Lua version
+you're running it on.
 
 #### Compatibility wrappers
 
