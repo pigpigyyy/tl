@@ -1339,6 +1339,7 @@ local is_attribute = attributes
 
 
 
+
 local function is_array_type(t)
    return t.typename == "array" or t.typename == "arrayrecord"
 end
@@ -3280,6 +3281,8 @@ end
 
 
 
+
+
 local function fields_of(t, meta)
    local i = 1
    local field_order, fields
@@ -3555,6 +3558,7 @@ local function recurse_node(root,
          recurse_typeargs(ast, visit_type)
          xs[1] = recurse(ast.fn_owner)
          xs[2] = recurse(ast.name)
+         extra_callback("before_arguments", ast, xs, visit_node)
          xs[3] = recurse(ast.args)
          xs[4] = recurse_type(ast.rets, visit_type)
          extra_callback("before_statements", ast, xs, visit_node)
@@ -5583,7 +5587,7 @@ local function init_globals(lax)
             ["charpattern"] = STRING,
             ["codepoint"] = a_type({ typename = "function", args = TUPLE({ STRING, OPT_NUMBER, OPT_NUMBER, OPT_BOOLEAN }), rets = VARARG({ INTEGER }) }),
             ["codes"] = a_type({ typename = "function", args = TUPLE({ STRING, OPT_BOOLEAN }), rets = TUPLE({
-               a_type({ typename = "function", args = TUPLE({}), rets = TUPLE({ NUMBER, STRING }) }),
+               a_type({ typename = "function", args = TUPLE({}), rets = TUPLE({ NUMBER, NUMBER }) }),
             }), }),
             ["len"] = a_type({ typename = "function", args = TUPLE({ STRING, OPT_NUMBER, OPT_NUMBER, OPT_BOOLEAN }), rets = TUPLE({ INTEGER }) }),
             ["offset"] = a_type({ typename = "function", args = TUPLE({ STRING, NUMBER, OPT_NUMBER }), rets = TUPLE({ INTEGER }) }),
@@ -8334,10 +8338,18 @@ tl.type_check = function(ast, opts)
          end
 
          if t.typename == "typetype" then
+            local typevals
+            if t.def.typeargs then
+               typevals = {}
+               for _, a in ipairs(t.def.typeargs) do
+                  table.insert(typevals, a_type({ typename = "typevar", typevar = a.typearg }))
+               end
+            end
             return a_type({
                y = exp.y,
                x = exp.x,
                typename = "nominal",
+               typevals = typevals,
                names = { exp.tk },
                found = t,
             })
@@ -9862,10 +9874,25 @@ tl.type_check = function(ast, opts)
             widen_all_unions()
             begin_scope(node)
          end,
+         before_arguments = function(node, children)
+            node.rtype = resolve_tuple_and_nominal(resolve_typetype(children[1]))
+
+
+            if node.rtype.typeargs then
+               for _, typ in ipairs(node.rtype.typeargs) do
+                  add_var(nil, typ.typearg, a_type({
+                     y = typ.y,
+                     x = typ.x,
+                     typename = "typearg",
+                     typearg = typ.typearg,
+                  }))
+               end
+            end
+         end,
          before_statements = function(node, children)
             add_internal_function_variables(node)
 
-            local rtype = resolve_tuple_and_nominal(resolve_typetype(children[1]))
+            local rtype = node.rtype
             if rtype.typename == "emptytable" then
                rtype.typename = "record"
                rtype.fields = {}
