@@ -3,6 +3,9 @@ local util = require("spec.util")
 local input_file = [[
 global type1 = 2
 
+global type type_g = record
+end
+
 local type type_2 = record
 end
 
@@ -36,7 +39,10 @@ local c = 100
 local output_file = [[
 type1 = 2
 
-local type_2 = {}
+type_g = {}
+
+
+
 
 
 local function bla()
@@ -195,6 +201,26 @@ describe("tl gen", function()
             local bit32 = bit32; if not bit32 then local p, m = pcall(require, 'bit32'); if p then bit32 = m end end
             local x = math.floor(2 / 3)
             local y = bit32.lshift(2, 3)
+         ]], util.read_file(lua_name))
+      end)
+
+      it("generates bit32 operations even for invalid variables (regression test for #673)", function()
+         local name = util.write_tmp_file(finally, [[
+
+            local foo = require("nonexisting")
+            local y = 2 | (foo.wat << 9)
+            local x = ~y
+         ]])
+         local pd = io.popen(util.tl_cmd("gen", "--gen-target=5.1", name), "r")
+         local output = pd:read("*a")
+         util.assert_popen_close(0, pd:close())
+         local lua_name = tl_to_lua(name)
+         assert.match("Wrote: " .. lua_name, output, 1, true)
+         util.assert_line_by_line([[
+            local bit32 = bit32; if not bit32 then local p, m = pcall(require, 'bit32'); if p then bit32 = m end end
+            local foo = require("nonexisting")
+            local y = bit32.bor(2, (bit32.lshift(foo.wat, 9)))
+            local x = bit32.bnot(y)
          ]], util.read_file(lua_name))
       end)
    end)

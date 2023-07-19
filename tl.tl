@@ -1461,9 +1461,9 @@ local function verify_kind(ps: ParseState, i: integer, kind: TokenKind, node_kin
    return fail(ps, i, "syntax error, expected " .. kind)
 end
 
-local type SkipFunction = function(ParseState, integer): integer
+local type SkipFunction = function(ParseState, integer): integer, Node
 
-local function skip(ps: ParseState, i: integer, skip_fn: SkipFunction): integer
+local function skip(ps: ParseState, i: integer, skip_fn: SkipFunction): integer, Node
    local err_ps: ParseState = {
       filename = ps.filename,
       tokens = ps.tokens,
@@ -1491,14 +1491,19 @@ end
 
 local function parse_table_value(ps: ParseState, i: integer): integer, Node, integer
    local next_word = ps.tokens[i].tk
-   local e: Node
    if next_word == "record" then
-      i = failskip(ps, i, "syntax error: this syntax is no longer valid; declare nested record inside a record", skip_record)
-   elseif next_word == "enum" then
+      local skip_i, e = skip(ps, i, skip_record)
+      if e then
+         fail(ps, i, "syntax error: this syntax is no longer valid; declare nested record inside a record")
+         return skip_i, new_node(ps.tokens, i, "error_node")
+      end
+   elseif next_word == "enum" and ps.tokens[i + 1].kind == "string" then
       i = failskip(ps, i, "syntax error: this syntax is no longer valid; declare nested enum inside a record", skip_enum)
-   else
-      i, e = parse_expression(ps, i)
+      return i, new_node(ps.tokens, i - 1, "error_node")
    end
+
+   local e: Node
+   i, e = parse_expression(ps, i)
    if not e then
       e = new_node(ps.tokens, i - 1, "error_node")
    end
@@ -2113,7 +2118,7 @@ do
             local key: Node
             i = i + 1
             if ps.tokens[i].kind ~= "identifier" then
-               local skipped = skip(ps, i, parse_type)
+               local skipped = skip(ps, i, parse_type as SkipFunction)
                if skipped > i + 1 then
                   fail(ps, i, "syntax error, cannot declare a type here (missing 'local' or 'global'?)")
                   return skipped, failstore(tkop, e1)
@@ -2777,7 +2782,7 @@ parse_record_body = function(ps: ParseState, i: integer, def: Type, node: Node, 
          i = i + 1
       elseif ps.tokens[i].tk == "{" then
          if def.typename == "arrayrecord" then
-            i = failskip(ps, i, "duplicated declaration of array element type in record", parse_type)
+            i = failskip(ps, i, "duplicated declaration of array element type in record", parse_type as SkipFunction)
          else
             i = i + 1
             local t: Type
@@ -3033,7 +3038,7 @@ local function parse_variable_declarations(ps: ParseState, i: integer, node_name
          return failskip(ps, i + 1, "syntax error: this syntax is no longer valid; use '" .. scope .. " enum " .. asgn.vars[1].tk .. "'", skip_enum)
       elseif next_word == "functiontype" then
          local scope = node_name == "local_declaration" and "local" or "global"
-         return failskip(ps, i + 1, "syntax error: this syntax is no longer valid; use '" .. scope .. " type " .. asgn.vars[1].tk .. " = function('...", parse_function_type)
+         return failskip(ps, i + 1, "syntax error: this syntax is no longer valid; use '" .. scope .. " type " .. asgn.vars[1].tk .. " = function('...", parse_function_type as SkipFunction)
       end
 
       i, asgn = parse_assignment_expression_list(ps, i, asgn)
@@ -3096,7 +3101,7 @@ local function parse_type_constructor(ps: ParseState, i: integer, node_name: Nod
    return i, asgn
 end
 
-local function skip_type_declaration(ps: ParseState, i: integer): integer
+local function skip_type_declaration(ps: ParseState, i: integer): integer, Node
    return (parse_type_declaration(ps, i - 1, "local_type"))
 end
 
@@ -4866,7 +4871,8 @@ function tl.search_module(module_name: string, search_dtl: boolean): string, FIL
 end
 
 local enum Narrow
-   "is"
+   "narrow"
+   "narrowed_declaration"
    "declaration"
 end
 
@@ -6207,7 +6213,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
    local function unused_warning(name: string, var: Variable)
       local prefix <const> = name:sub(1,1)
       if var.declared_at
-         and not (var.is_narrowed == "is")
+         and var.is_narrowed ~= "narrow"
          and prefix ~= "_"
          and prefix ~= "@"
       then
@@ -6504,7 +6510,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
       var: Variable
    end
 
-   local function check_for_unused_vars(vars: {string:Variable})
+   local function check_for_unused_vars(vars: {string:Variable}, is_global?: boolean)
       if not next(vars) then
          return
       end
@@ -6514,6 +6520,9 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
             if var.used_as_type then
                var.declared_at.elide_type = true
             else
+               if is_typetype(var.t) and not is_global then
+                  var.declared_at.elide_type = true
+               end
                table.insert(list, { y = var.declared_at.y, x = var.declared_at.x, name = name, var = var })
             end
          elseif var.used and is_typetype(var.t) and var.aliasing then
@@ -7909,7 +7918,8 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
 
    local function widen_in_scope(scope: Scope, var: string): boolean
       assert(scope[var], "no " .. var .. " in scope")
-      if scope[var].is_narrowed then
+      local narrow_mode = scope[var].is_narrowed
+      if narrow_mode and narrow_mode ~= "declaration" then
          if scope[var].narrowed_from then
             scope[var].t = scope[var].narrowed_from
             scope[var].narrowed_from = nil
@@ -8660,7 +8670,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
             if not f.where then
                t.inferred_at = nil
             end
-            add_var(nil, v, t, "const", "is")
+            add_var(nil, v, t, "const", "narrow")
          end
       end
    end
@@ -9285,7 +9295,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
 
                   local rt = resolve_tuple_and_nominal(t)
                   if rt.typename ~= "enum" and not same_type(t, infertype) then
-                     add_var(where, var.tk, infer_at(where, infertype), "const", "declaration")
+                     add_var(where, var.tk, infer_at(where, infertype), "const", "narrowed_declaration")
                   end
                end
 
@@ -9353,7 +9363,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
                      assert_is_a(varnode, val, vartype, "in assignment")
                      if varnode.kind == "variable" and vartype.typename == "union" then
                         -- narrow union
-                        add_var(varnode, varnode.tk, val, nil, "is")
+                        add_var(varnode, varnode.tk, val, nil, "narrow")
                      end
                   else
                      node_error(varnode, "variable is not being assigned a value")
@@ -10216,14 +10226,14 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
                if not node.type then
                   node.type, meta_on_operator = check_metamethod(node, node.op.op, a)
                   if not node.type then
-                     return node_error(node, "cannot use operator '" .. node.op.op:gsub("%%", "%%%%") .. "' on type %s", resolve_tuple(orig_a))
+                     node_error(node, "cannot use operator '" .. node.op.op:gsub("%%", "%%%%") .. "' on type %s", resolve_tuple(orig_a))
                   end
                end
                if a.typename == "map" then
                   if a.keys.typename == "number" or a.keys.typename == "integer" then
                       node_warning("hint", node, "using the '#' operator on a map with numeric key type may produce unexpected results")
                   else
-                      return node_error(node, "using the '#' operator on this map will always return 0")
+                      node_error(node, "using the '#' operator on this map will always return 0")
                   end
                end
 
@@ -10262,7 +10272,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
                if not node.type then
                   node.type, meta_on_operator = check_metamethod(node, node.op.op, a, b)
                   if not node.type then
-                     return node_error(node, "cannot use operator '" .. node.op.op:gsub("%%", "%%%%") .. "' for types %s and %s", resolve_tuple(orig_a), resolve_tuple(orig_b))
+                     node_error(node, "cannot use operator '" .. node.op.op:gsub("%%", "%%%%") .. "' for types %s and %s", resolve_tuple(orig_a), resolve_tuple(orig_b))
                   end
                end
 
@@ -10591,7 +10601,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
    recurse_node(ast, visit_node, visit_type)
 
    close_types(st[1])
-   check_for_unused_vars(st[1])
+   check_for_unused_vars(st[1], true)
 
    clear_redundant_errors(errors)
 
