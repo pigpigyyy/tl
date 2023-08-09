@@ -55,6 +55,12 @@ do
    end
 end
 
+local function check_collect(i)
+   if i % 50 == 0 then
+      collectgarbage()
+   end
+end
+
 local function printerr(s)
    io.stderr:write(s .. "\n")
 end
@@ -717,9 +723,7 @@ do
             write_out(tlconfig, result, output_file)
          end
 
-         if i > 1 then
-            collectgarbage()
-         end
+         check_collect(i)
       end
 
       local ok = report_all_errors(tlconfig, env)
@@ -1184,9 +1188,7 @@ commands["check"] = function(tlconfig, args)
          end
       end
 
-      if i > 1 then
-         collectgarbage()
-      end
+      check_collect(i)
    end
 
    local ok = report_all_errors(tlconfig, env)
