@@ -7659,13 +7659,10 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
 
          check_args_rets = function(where: Node, where_args: {Node}, f: Type, args: {Type}, rets: {Type}, argdelta: integer): Type, {Error}
             local rets_ok = true
-            local rets_errs: {Error}
             local args_ok: boolean
             local args_errs: {Error}
 
-            local from = 1
             if argdelta == -1 then
-               from = 2
                local errs = {}
                if not arg_check(where, is_a, args[1], f.args[1], nil, errs, "self") then
                   return nil, errs
@@ -7676,7 +7673,7 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
                rets = infer_at(where, rets)
                infer_emptytables(where, nil, rets, f.rets, 0)
 
-               rets_ok, rets_errs = check_func_type_list(where, nil, f.rets, rets, 1, 0, "return")
+               rets_ok = check_func_type_list(where, nil, f.rets, rets, 1, 0, "return")
             end
 
             args_ok, args_errs = check_func_type_list(where, where_args, args, f.args, 1, argdelta, "argument")
