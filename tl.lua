@@ -136,6 +136,7 @@ local tl = {TypeCheckOptions = {}, Env = {}, Symbol = {}, Result = {}, Error = {
 
 
 
+
 tl.version = function()
    return VERSION
 end
@@ -10753,6 +10754,14 @@ function tl.get_types(result, trenv)
             r[k] = get_typenum(v)
          end
          ti.fields = r
+         if rt.meta_fields then
+            local mr = {}
+            for _, k in ipairs(rt.meta_field_order) do
+               local v = rt.meta_fields[k]
+               mr[k] = get_typenum(v)
+            end
+            ti.meta_fields = mr
+         end
       end
 
       if is_array_type(rt) then

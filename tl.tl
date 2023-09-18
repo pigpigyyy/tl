@@ -99,6 +99,7 @@ local record tl
       y: integer
       ref: integer -- NOMINAL
       fields: {string: integer} -- RECORD, ARRAYRECORD
+      meta_fields: {string: integer} -- RECORD, ARRAYRECORD
       enums: {string} -- ENUM
       args: {{integer, string}} -- FUNCTION
       rets: {{integer, string}} -- FUNCTION
@@ -10753,6 +10754,14 @@ function tl.get_types(result: Result, trenv: TypeReportEnv): TypeReport, TypeRep
             r[k] = get_typenum(v)
          end
          ti.fields = r
+         if rt.meta_fields then
+            local mr = {}
+            for _, k in ipairs(rt.meta_field_order) do
+               local v = rt.meta_fields[k]
+               mr[k] = get_typenum(v)
+            end
+            ti.meta_fields = mr
+         end
       end
 
       if is_array_type(rt) then
