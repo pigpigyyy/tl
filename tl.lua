@@ -1,5 +1,5 @@
 local _tl_compat; if (tonumber((_VERSION or ''):match('[%d.]*$')) or 0) < 5.3 then local p, m = pcall(require, 'compat53.module'); if p then _tl_compat = m end end; local assert = _tl_compat and _tl_compat.assert or assert; local io = _tl_compat and _tl_compat.io or io; local ipairs = _tl_compat and _tl_compat.ipairs or ipairs; local load = _tl_compat and _tl_compat.load or load; local math = _tl_compat and _tl_compat.math or math; local os = _tl_compat and _tl_compat.os or os; local package = _tl_compat and _tl_compat.package or package; local pairs = _tl_compat and _tl_compat.pairs or pairs; local string = _tl_compat and _tl_compat.string or string; local table = _tl_compat and _tl_compat.table or table; local _tl_table_unpack = unpack or table.unpack
-local VERSION = "0.15.2+dora"
+local VERSION = "0.15.3+dora"
 
 local tl = {TypeCheckOptions = {}, Env = {}, Symbol = {}, Result = {}, Error = {}, TypeInfo = {}, TypeReport = {}, TypeReportEnv = {}, }
 
@@ -2584,7 +2584,7 @@ local function parse_forin(ps, i)
    local node = new_node(ps.tokens, i, "forin")
    i = i + 1
    node.vars = new_node(ps.tokens, i, "variable_list")
-   i, node.vars = parse_list(ps, i, node.vars, { ["in"] = true }, "sep", parse_variable_name)
+   i, node.vars = parse_list(ps, i, node.vars, { ["in"] = true }, "sep", parse_identifier)
    i = verify_tk(ps, i, "in")
    node.exps = new_node(ps.tokens, i, "expression_list")
    i = parse_list(ps, i, node.exps, { ["do"] = true }, "sep", parse_expression)
@@ -5067,6 +5067,45 @@ local function init_globals(lax)
       return t
    end
 
+   local function an_enum(keys)
+      local t = a_type({
+         typename = "enum",
+         enumset = {},
+      })
+      for _, k in ipairs(keys) do
+         t.enumset[k] = true
+      end
+      return t
+   end
+
+
+
+
+
+
+
+
+
+   local file_reader_poly_types = {
+      { ctor = VARARG, args = { UNION({ NUMBER, an_enum({ "*a", "a", "*l", "l", "*L", "L" }) }) }, rets = { STRING } },
+      { ctor = TUPLE, args = { an_enum({ "*n", "n" }) }, rets = { NUMBER, STRING } },
+      { ctor = VARARG, args = { UNION({ NUMBER, an_enum({ "*a", "a", "*l", "l", "*L", "L", "*n", "n" }) }) }, rets = { UNION({ STRING, NUMBER }) } },
+      { ctor = VARARG, args = { UNION({ NUMBER, STRING }) }, rets = { STRING } },
+   }
+
+   local function a_file_reader(fn)
+      local t = a_type({
+         typename = "poly",
+         types = {},
+      })
+      for _, entry in ipairs(file_reader_poly_types) do
+         local args = shallow_copy_type(entry.args)
+         local rets = shallow_copy_type(entry.rets)
+         table.insert(t.types, fn(entry.ctor, args, rets))
+      end
+      return t
+   end
+
    local LOAD_FUNCTION = a_type({ typename = "function", args = {}, rets = TUPLE({ STRING }) })
 
    local OS_DATE_TABLE = a_type({
@@ -5083,8 +5122,6 @@ local function init_globals(lax)
          ["isdst"] = BOOLEAN,
       },
    })
-
-   local OS_DATE_TABLE_FORMAT = a_type({ typename = "enum", enumset = { ["!*t"] = true, ["*t"] = true } })
 
    local DEBUG_GETINFO_TABLE = a_type({
       typename = "record",
@@ -5106,16 +5143,8 @@ local function init_globals(lax)
       },
    })
 
-   local DEBUG_HOOK_EVENT = a_type({
-      typename = "enum",
-      enumset = {
-         ["call"] = true,
-         ["tail call"] = true,
-         ["return"] = true,
-         ["line"] = true,
-         ["count"] = true,
-      },
-   })
+   local DEBUG_HOOK_EVENT = an_enum({ "call", "tail call", "return", "line", "count" })
+
    local DEBUG_HOOK_FUNCTION = a_type({
       typename = "function",
       args = TUPLE({ DEBUG_HOOK_EVENT, INTEGER }),
@@ -5170,9 +5199,9 @@ local function init_globals(lax)
       ["collectgarbage"] = a_type({
          typename = "poly",
          types = {
-            a_type({ typename = "function", args = TUPLE({ a_type({ typename = "enum", enumset = { ["collect"] = true, ["count"] = true, ["stop"] = true, ["restart"] = true } }) }), rets = TUPLE({ NUMBER }) }),
-            a_type({ typename = "function", args = TUPLE({ a_type({ typename = "enum", enumset = { ["step"] = true, ["setpause"] = true, ["setstepmul"] = true } }), NUMBER }), rets = TUPLE({ NUMBER }) }),
-            a_type({ typename = "function", args = TUPLE({ a_type({ typename = "enum", enumset = { ["isrunning"] = true } }) }), rets = TUPLE({ BOOLEAN }) }),
+            a_type({ typename = "function", args = TUPLE({ an_enum({ "collect", "count", "stop", "restart" }) }), rets = TUPLE({ NUMBER }) }),
+            a_type({ typename = "function", args = TUPLE({ an_enum({ "step", "setpause", "setstepmul" }), NUMBER }), rets = TUPLE({ NUMBER }) }),
+            a_type({ typename = "function", args = TUPLE({ an_enum({ "isrunning" }) }), rets = TUPLE({ BOOLEAN }) }),
             a_type({ typename = "function", args = TUPLE({ STRING, OPT_NUMBER }), rets = TUPLE({ a_type({ typename = "union", types = { BOOLEAN, NUMBER } }) }) }),
          },
       }),
@@ -5234,10 +5263,16 @@ local function init_globals(lax)
             fields = {
                ["close"] = a_type({ typename = "function", args = TUPLE({ NOMINAL_FILE }), rets = TUPLE({ BOOLEAN, STRING, INTEGER }) }),
                ["flush"] = a_type({ typename = "function", args = TUPLE({ NOMINAL_FILE }), rets = TUPLE({}) }),
-               ["lines"] = a_type({ typename = "function", args = VARARG({ NOMINAL_FILE, a_type({ opt = true, typename = "union", types = { STRING, NUMBER } }) }), rets = TUPLE({
-                  a_type({ typename = "function", args = TUPLE({}), rets = VARARG({ STRING }) }),
-               }), }),
-               ["read"] = a_type({ typename = "function", args = TUPLE({ NOMINAL_FILE, OPT_UNION({ STRING, NUMBER }) }), rets = TUPLE({ STRING, STRING }) }),
+               ["lines"] = a_file_reader(function(ctor, args, rets)
+                  table.insert(args, 1, NOMINAL_FILE)
+                  return a_type({ typename = "function", args = ctor(args), rets = TUPLE({
+                     a_type({ typename = "function", args = TUPLE({}), rets = ctor(rets) }),
+                  }), })
+               end),
+               ["read"] = a_file_reader(function(ctor, args, rets)
+                  table.insert(args, 1, NOMINAL_FILE)
+                  return a_type({ typename = "function", args = ctor(args), rets = ctor(rets) })
+               end),
                ["seek"] = a_type({ typename = "function", args = TUPLE({ NOMINAL_FILE, OPT_STRING, OPT_NUMBER }), rets = TUPLE({ INTEGER, STRING }) }),
                ["setvbuf"] = a_type({ typename = "function", args = TUPLE({ NOMINAL_FILE, STRING, OPT_NUMBER }), rets = TUPLE({}) }),
                ["write"] = a_type({ typename = "function", args = VARARG({ NOMINAL_FILE, UNION({ STRING, NUMBER }) }), rets = TUPLE({ NOMINAL_FILE, STRING }) }),
@@ -5255,7 +5290,7 @@ local function init_globals(lax)
                ["__gc"] = a_type({ typename = "function", args = TUPLE({ a }), rets = TUPLE({}) }),
                ["__index"] = ANY,
                ["__len"] = a_type({ typename = "function", args = TUPLE({ a }), rets = TUPLE({ ANY }) }),
-               ["__mode"] = a_type({ typename = "enum", enumset = { ["k"] = true, ["v"] = true, ["kv"] = true } }),
+               ["__mode"] = an_enum({ "k", "v", "kv" }),
                ["__newindex"] = ANY,
                ["__pairs"] = a_gfunction(2, function(k, v)
                   return {
@@ -5321,8 +5356,10 @@ local function init_globals(lax)
             ["getlocal"] = a_type({
                typename = "poly",
                types = {
-                  a_type({ typename = "function", args = TUPLE({ THREAD, FUNCTION, NUMBER }), rets = TUPLE({}) }),
-                  a_type({ typename = "function", args = TUPLE({ FUNCTION, NUMBER }), rets = TUPLE({}) }),
+                  a_type({ typename = "function", args = TUPLE({ THREAD, FUNCTION, NUMBER }), rets = STRING }),
+                  a_type({ typename = "function", args = TUPLE({ THREAD, NUMBER, NUMBER }), rets = TUPLE({ STRING, ANY }) }),
+                  a_type({ typename = "function", args = TUPLE({ FUNCTION, NUMBER }), rets = STRING }),
+                  a_type({ typename = "function", args = TUPLE({ NUMBER, NUMBER }), rets = TUPLE({ STRING, ANY }) }),
                },
             }),
             ["getmetatable"] = a_gfunction(1, function(a) return { args = TUPLE({ a }), rets = TUPLE({ METATABLE(a) }) } end),
@@ -5371,13 +5408,17 @@ local function init_globals(lax)
             ["close"] = a_type({ typename = "function", args = TUPLE({ OPT_NOMINAL_FILE }), rets = TUPLE({ BOOLEAN, STRING }) }),
             ["flush"] = a_type({ typename = "function", args = TUPLE({}), rets = TUPLE({}) }),
             ["input"] = a_type({ typename = "function", args = TUPLE({ OPT_UNION({ STRING, NOMINAL_FILE }) }), rets = TUPLE({ NOMINAL_FILE }) }),
-            ["lines"] = a_type({ typename = "function", args = VARARG({ OPT_STRING, a_type({ opt = true, typename = "union", types = { STRING, NUMBER } }) }), rets = TUPLE({
-               a_type({ typename = "function", args = TUPLE({}), rets = VARARG({ STRING }) }),
-            }), }),
+            ["lines"] = a_file_reader(function(ctor, args, rets)
+               return a_type({ typename = "function", args = ctor(args), rets = TUPLE({
+                  a_type({ typename = "function", args = TUPLE({}), rets = ctor(rets) }),
+               }), })
+            end),
             ["open"] = a_type({ typename = "function", args = TUPLE({ STRING, OPT_STRING }), rets = TUPLE({ NOMINAL_FILE, STRING }) }),
             ["output"] = a_type({ typename = "function", args = TUPLE({ OPT_UNION({ STRING, NOMINAL_FILE }) }), rets = TUPLE({ NOMINAL_FILE }) }),
             ["popen"] = a_type({ typename = "function", args = TUPLE({ STRING, OPT_STRING }), rets = TUPLE({ NOMINAL_FILE, STRING }) }),
-            ["read"] = a_type({ typename = "function", args = TUPLE({ OPT_UNION({ STRING, NUMBER }) }), rets = TUPLE({ STRING, STRING }) }),
+            ["read"] = a_file_reader(function(ctor, args, rets)
+               return a_type({ typename = "function", args = ctor(args), rets = ctor(rets) })
+            end),
             ["stderr"] = NOMINAL_FILE,
             ["stdin"] = NOMINAL_FILE,
             ["stdout"] = NOMINAL_FILE,
@@ -5468,7 +5509,7 @@ local function init_globals(lax)
                typename = "poly",
                types = {
                   a_type({ typename = "function", args = TUPLE({}), rets = TUPLE({ STRING }) }),
-                  a_type({ typename = "function", args = TUPLE({ OS_DATE_TABLE_FORMAT, OPT_NUMBER }), rets = TUPLE({ OS_DATE_TABLE }) }),
+                  a_type({ typename = "function", args = TUPLE({ an_enum({ "!*t", "*t" }), OPT_NUMBER }), rets = TUPLE({ OS_DATE_TABLE }) }),
                   a_type({ typename = "function", args = TUPLE({ OPT_STRING, OPT_NUMBER }), rets = TUPLE({ STRING }) }),
                },
             }),
