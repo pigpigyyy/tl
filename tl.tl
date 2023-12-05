@@ -24,6 +24,12 @@ local record tl
       "5.4"
    end
 
+   record PrettyPrintOptions
+      preserve_indent: boolean
+      preserve_newlines: boolean
+      preserve_hashbang: boolean
+   end
+
    record TypeCheckOptions
       lax: boolean
       filename: string
@@ -126,7 +132,7 @@ local record tl
    load: function(string, string, LoadMode, {any:any}): LoadFunction, string
    process: function(string, Env, string, FILE): (Result, string)
    process_string: function(string, boolean, Env, ?string, ?string): Result
-   gen: function(string, Env): string
+   gen: function(string, Env, PrettyPrintOptions): string, Result
    type_check: function(Node, TypeCheckOptions): Result, string
    init_env: function(?boolean, ?(boolean | CompatMode), ?TargetMode, ?{string}): Env, string
    version: function(): string
@@ -207,6 +213,7 @@ local type Result = tl.Result
 local type Env = tl.Env
 local type Error = tl.Error
 local type CompatMode = tl.CompatMode
+local type PrettyPrintOptions = tl.PrettyPrintOptions
 local type TypeCheckOptions = tl.TypeCheckOptions
 local type LoadMode = tl.LoadMode
 local type LoadFunction = tl.LoadFunction
@@ -262,6 +269,7 @@ end
 --------------------------------------------------------------------------------
 
 local enum TokenKind
+   "hashbang"
    "keyword"
    "op"
    "string"
@@ -596,10 +604,12 @@ do
 
       local len = #input
       if input:sub(1,2) == "#!" then
+         begin_token()
          i = input:find("\n")
          if not i then
             i = len + 1
          end
+         end_token_here("hashbang")
          y = 2
          x = 0
       end
@@ -1261,6 +1271,7 @@ local record Node
    kind: NodeKind
    symbol_list_slot: integer
    semicolon: boolean
+   hashbang: string
 
    is_longstring: boolean
 
@@ -3241,7 +3252,16 @@ function tl.parse_program(tokens: {Token}, errs: {Error}, filename: string): Nod
       filename = filename or "",
       required_modules = {},
    }
-   local _, node = parse_statements(ps, 1, true)
+   local i = 1
+   local hashbang: string
+   if ps.tokens[i].kind == "hashbang" then
+      hashbang = ps.tokens[i].tk
+      i = i + 1
+   end
+   local _, node = parse_statements(ps, i, true)
+   if hashbang then
+      node.hashbang = hashbang
+   end
 
    clear_redundant_errors(errs)
    return node, ps.required_modules
@@ -3687,19 +3707,17 @@ local spaced_op: {integer:{string:boolean}} = {
    },
 }
 
-local record PrettyPrintOpts
-   preserve_indent: boolean
-   preserve_newlines: boolean
-end
 
-local default_pretty_print_ast_opts: PrettyPrintOpts = {
+local default_pretty_print_ast_opts: PrettyPrintOptions = {
    preserve_indent = true,
    preserve_newlines = true,
+   preserve_hashbang = false,
 }
 
-local fast_pretty_print_ast_opts: PrettyPrintOpts = {
+local fast_pretty_print_ast_opts: PrettyPrintOptions = {
    preserve_indent = false,
    preserve_newlines = true,
+   preserve_hashbang = false,
 }
 
 local primitive: {TypeName:string} = {
@@ -3713,12 +3731,12 @@ local primitive: {TypeName:string} = {
    ["thread"] = "thread",
 }
 
-function tl.pretty_print_ast(ast: Node, gen_target: TargetMode, mode?: boolean | PrettyPrintOpts): string, string
+function tl.pretty_print_ast(ast: Node, gen_target: TargetMode, mode: boolean | PrettyPrintOptions): string, string
    local err: string
    local indent = 0
 
-   local opts: PrettyPrintOpts
-   if mode is PrettyPrintOpts then
+   local opts: PrettyPrintOptions
+   if mode is PrettyPrintOptions then
       opts = mode
    elseif mode == true then
       opts = fast_pretty_print_ast_opts
@@ -3836,6 +3854,9 @@ function tl.pretty_print_ast(ast: Node, gen_target: TargetMode, mode?: boolean |
       ["statements"] = {
          after = function(node: Node, children: {Output}): Output
             local out: Output = { y = node.y, h = 0 }
+            if opts.preserve_hashbang and node.hashbang then
+               table.insert(out, node.hashbang)
+            end
             local space: string
             for i, child in ipairs(children) do
                add_child(out, child, space, indent)
@@ -9789,8 +9810,13 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
                         assert_is_a(node[i], cvtype, decltype.elements, in_context(node.expected_context, "expected an array"), "at index " .. tostring(n))
                      end
                   elseif node[i].key_parsed == "implicit" then
+                     if is_map then
+                        assert_is_a(node[i], INTEGER, decltype.keys, in_context(node.expected_context, "in map key"))
+                        assert_is_a(node[i], cvtype, decltype.values, in_context(node.expected_context, "in map value"))
+                     end
                      force_array = expand_type(node[i], force_array, child.vtype)
                   elseif is_map then
+                     force_array = nil
                      assert_is_a(node[i], child.ktype, decltype.keys, in_context(node.expected_context, "in map key"))
                      assert_is_a(node[i], cvtype, decltype.values, in_context(node.expected_context, "in map value"))
                   else
@@ -10093,9 +10119,18 @@ tl.type_check = function(ast: Node, opts: TypeCheckOptions): Result, string
                   if node.expected then
                      is_a(node.e1.type.rets, node.expected)
                   end
-                  for i, typ in ipairs(node.e1.type.args) do
-                     if node.e2[i + argdelta] then
-                        node.e2[i + argdelta].expected = typ
+                  local e1args = node.e1.type.args
+                  local at = argdelta
+                  for _, typ in ipairs(e1args) do
+                     at = at + 1
+                     if node.e2[at] then
+                        node.e2[at].expected = typ
+                     end
+                  end
+                  if e1args.is_va then
+                     local typ = e1args[#e1args]
+                     for i = at + 1, #node.e2 do
+                        node.e2[i].expected = typ
                      end
                   end
                end
@@ -11065,7 +11100,7 @@ function tl.process_string(input: string, is_lua: boolean, env: Env, filename?: 
    return result
 end
 
-tl.gen = function(input: string, env: Env): string, Result
+tl.gen = function(input: string, env: Env, pp: PrettyPrintOptions): string, Result
    env = env or assert(tl.init_env(), "Default environment initialization failed")
    local result = tl.process_string(input, false, env)
 
@@ -11074,7 +11109,7 @@ tl.gen = function(input: string, env: Env): string, Result
    end
 
    local code: string
-   code, result.gen_error = tl.pretty_print_ast(result.ast, env.gen_target)
+   code, result.gen_error = tl.pretty_print_ast(result.ast, env.gen_target, pp)
    return code, result
 end
 

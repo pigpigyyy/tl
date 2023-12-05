@@ -110,7 +110,7 @@ end
 
 local function find_file_in_parent_dirs(fname)
    for _ = 1, 20 do
-      local fd = io.open(fname, "r")
+      local fd = io.open(fname, "rb")
       if fd then
          fd:close()
          return fname
@@ -230,20 +230,20 @@ local function type_check_and_load(tlconfig, filename)
    return chunk
 end
 
-local function write_out(tlconfig, result, output_file)
+local function write_out(tlconfig, result, output_file, pp_opts)
    if tlconfig["pretend"] then
       print("Would Write: " .. output_file)
       return
    end
 
-   local ofd, err = io.open(output_file, "w")
+   local ofd, err = io.open(output_file, "wb")
 
    if not ofd then
       die("cannot write " .. output_file .. ": " .. err)
    end
 
    local _
-   _, err = ofd:write(tl.pretty_print_ast(result.ast, tlconfig.gen_target) .. "\n")
+   _, err = ofd:write(tl.pretty_print_ast(result.ast, tlconfig.gen_target, pp_opts) .. "\n")
    if err then
       die("error writing " .. output_file .. ": " .. err)
    end
@@ -423,7 +423,7 @@ do
                   die("Something has gone wrong while executing the " ..
                       "\"gen_code\" part of the build file. Error : ".. tostring(message))
                end
-               local file = io.open(time_keeper_path, "w")
+               local file = io.open(time_keeper_path, "wb")
                file:write(last_edit_time)
                file:flush()
                file:close()
@@ -863,6 +863,7 @@ local function get_args_parser()
    local gen_command = parser:command("gen", "Generate a Lua file for one or more Teal files.")
    gen_command:argument("file", "The Teal source file."):args("+")
    gen_command:flag("-c --check", "Type check and fail on type errors.")
+   gen_command:flag("--keep-hashbang", "Preserve hashbang line (#!) at the top of file if present.")
    gen_command:option("-o --output", "Write to <filename> instead.")
               :argname("<filename>")
 
@@ -1115,7 +1116,7 @@ local function cd()
    end
    local wd = os.getenv("PWD")
    if not wd then
-      local pd = io.popen("cd", "r")
+      local pd = io.popen("cd", "rb")
       wd = pd:read("*l")
       pd:close()
    end
@@ -1227,9 +1228,15 @@ commands["gen"] = function(tlconfig, args)
    local results = {}
    local err
    local env
+   local pp_opts
    for i, input_file in ipairs(args["file"]) do
       if not env then
          env = setup_env(tlconfig, input_file)
+         pp_opts = {
+            preserve_indent = true,
+            preserve_newlines = true,
+            preserve_hashbang = args["keep_hashbang"]
+         }
       end
 
       local res = {
@@ -1243,14 +1250,12 @@ commands["gen"] = function(tlconfig, args)
       end
 
       table.insert(results, res)
-      if i > 1 then
-         collectgarbage()
-      end
+      check_collect(i)
    end
 
    for _, res in ipairs(results) do
       if #res.tl_result.syntax_errors == 0 then
-         write_out(tlconfig, res.tl_result, args["output"] or res.output_file)
+         write_out(tlconfig, res.tl_result, args["output"] or res.output_file, pp_opts)
       end
    end
 
@@ -1345,9 +1350,7 @@ do
                tr, trenv = tl.get_types(result, trenv)
             end
          end
-         if i > 1 then
-            collectgarbage()
-         end
+         check_collect(i)
       end
 
       local ok, _, _, w = report_all_errors(tlconfig, env)
