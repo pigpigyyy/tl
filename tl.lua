@@ -4846,8 +4846,8 @@ end
 local function filename_to_module_name(filename)
    local path = os.getenv("TL_PATH") or package.path
    for entry in path:gmatch("[^;]+") do
-      entry = entry:gsub("%.", "%%.")
-      local lua_pat = "^" .. entry:gsub("%?", ".+") .. "$"
+      local ent = entry:gsub("%.", "%%.")
+      local lua_pat = "^" .. ent:gsub("%?", ".+") .. "$"
       local d_tl_pat = lua_pat:gsub("%%.lua%$", "%%.d%%.tl$")
       local tl_pat = lua_pat:gsub("%%.lua%$", "%%.tl$")
 
@@ -5929,7 +5929,10 @@ tl.type_check = function(ast, opts)
       end
    end
 
+   local resolve_embeds
+
    local function union_type(t)
+      resolve_embeds(t)
       if is_typetype(t) then
          return union_type(t.def)
       elseif t.typename == "tuple" then
@@ -6728,9 +6731,9 @@ tl.type_check = function(ast, opts)
       return false, t2.typename .. " can't be embedded"
    end
 
-   local resolve_tuple_and_nominal = nil
+   local resolve_tuple_and_nominal
 
-   local function resolve_embeds(t)
+   resolve_embeds = function(t)
       if not t.embeds or t.embeds_resolved then
          return t
       end
@@ -9600,7 +9603,11 @@ tl.type_check = function(ast, opts)
                         r = lax and UNKNOWN or INVALID
                      end
                   end
-                  add_var(v, v.tk, r)
+                  if i == 1 then
+                     add_var(v, v.tk, r, "const")
+                  else
+                     add_var(v, v.tk, r)
+                  end
                   last = r
                end
                if (not lax) and (not rets.is_va and #node.vars > #rets) then
@@ -9632,7 +9639,7 @@ tl.type_check = function(ast, opts)
             (not step_t or step_t.typename == "integer")) and
             INTEGER or
             NUMBER
-            add_var(node.var, node.var.tk, t)
+            add_var(node.var, node.var.tk, t, "const")
          end,
          after = end_scope_and_none_type,
       },

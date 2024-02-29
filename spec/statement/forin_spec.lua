@@ -234,7 +234,7 @@ describe("forin", function()
              for _, x in pairs(xs) do
                for _, u in ipairs({}) do
                 local v = x[u]
-                _, v = next(v)
+                local __, v = next(v)
                end
              end
            end
@@ -246,6 +246,8 @@ describe("forin", function()
          { msg = "_" },
          { msg = "x" },
          { msg = "u" },
+         { msg = "v" },
+         { msg = "__" },
          { msg = "v" },
       }))
    end)
