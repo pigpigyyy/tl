@@ -143,6 +143,7 @@ local tl = {PrettyPrintOptions = {}, TypeCheckOptions = {}, Env = {}, Symbol = {
 
 
 
+
 tl.version = function()
    return VERSION
 end
@@ -10796,6 +10797,7 @@ function tl.get_types(result, trenv)
          table.insert(args, mark_array({ get_typenum(fnarg), nil }))
       end
       ti.args = mark_array(args)
+      ti.is_method = rt.is_method
       local rets = {}
       for _, fnarg in ipairs(rt.rets) do
          table.insert(rets, mark_array({ get_typenum(fnarg), nil }))

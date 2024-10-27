@@ -110,6 +110,7 @@ local record tl
       args: {{integer, string}} -- FUNCTION
       rets: {{integer, string}} -- FUNCTION
       vararg: boolean -- FUNCTION
+      is_method: boolean -- FUNCTION
       types: {integer} -- UNION, POLY, TUPLE
       keys: integer -- MAP
       values: integer -- MAP
@@ -10796,6 +10797,7 @@ function tl.get_types(result: Result, trenv: TypeReportEnv): TypeReport, TypeRep
          table.insert(args, mark_array { get_typenum(fnarg), nil })
       end
       ti.args = mark_array(args)
+      ti.is_method = rt.is_method
       local rets: {{integer, string}} = {}
       for _, fnarg in ipairs(rt.rets) do
          table.insert(rets, mark_array { get_typenum(fnarg), nil })
